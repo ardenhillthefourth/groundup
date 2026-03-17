@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GroundUp — Feasibility Bot</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #060a0e; --surface: #0c1318; --surface2: #101b24; --surface3: #152030;
+    --border: #1a2d3d; --border2: #22394d;
+    --accent: #00e5ff; --accent2: #00ffa3; --accent3: #ff6b35; --accent4: #a78bfa;
+    --red: #ff4d6d; --text: #dff0f7; --text2: #6a90a8; --text3: #304d60;
+  }
+  html { scroll-behavior: smooth; }
+  html, body, #root { height: 100%; background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; }
+  body { overflow-x: hidden; }
+  input, select { color-scheme: dark; font-family: inherit; }
+  input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input[type=number] { -moz-appearance: textfield; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+  @keyframes fadeUp    { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes fadeIn    { from{opacity:0} to{opacity:1} }
+  @keyframes slideRight{ from{opacity:0;transform:translateX(-12px)} to{opacity:1;transform:translateX(0)} }
+  @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.3;transform:scale(.6)} }
+  @keyframes shimmer   { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+  @keyframes blink     { 0%,100%{opacity:1} 50%{opacity:0} }
+  @keyframes spin      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  @keyframes panelSlide{ from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+  @keyframes overlayIn { from{opacity:0} to{opacity:1} }
+  @keyframes numberPop { 0%{transform:scale(.8);opacity:0} 60%{transform:scale(1.05)} 100%{transform:scale(1);opacity:1} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const fmt  = (n) => Number(n).toLocaleString("en-US");
+const fmtM = (n) => "$" + (n / 1e6).toFixed(2) + "M";
+const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+
+function Counter({ target, decimals=1, running, suffix="" }) {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    if (!running) { setVal(0); return; }
+    let start = null;
+    const dur = 2000;
+    const tick = (ts) => {
+      if (!start) start = ts;
+      const p = Math.min((ts - start) / dur, 1);
+      const e = 1 - Math.pow(1 - p, 3);
+      setVal(+(e * target).toFixed(decimals));
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [running, target]);
+  return <span>{val.toFixed(decimals)}{suffix}</span>;
+}
+
+function PulseDots() {
+  return (
+    <div style={{display:"flex",gap:3,alignItems:"center"}}>
+      {[0,.18,.36].map(d=>(
+        <div key={d} style={{width:5,height:5,borderRadius:"50%",background:"var(--accent)",animation:`pulse-dot .9s ${d}s ease-in-out infinite`}}/>
+      ))}
+    </div>
+  );
+}
+
+function StepPill({ n, label, active, done }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <div style={{width:28,height:28,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"DM Mono",fontSize:11,fontWeight:500,background:done?"var(--accent2)":active?"var(--accent)":"var(--surface3)",color:(done||active)?"#000":"var(--text3)",border:`1px solid ${done?"var(--accent2)":active?"var(--accent)":"var(--border)"}`,transition:"all .3s",flexShrink:0}}>
+        {done?"✓":n}
+      </div>
+      <span style={{fontFamily:"Syne",fontWeight:600,fontSize:12,color:active?"var(--text)":done?"var(--accent2)":"var(--text3)",transition:"color .3s"}}>{label}</span>
+    </div>
+  );
+}
+
+function LiveBarChart({ land, construction, soft }) {
+  const total = land + construction + soft;
+  const bars = [
+    {label:"Land",   val:land,         color:"var(--accent)",  pct:land/total*100},
+    {label:"Constr", val:construction, color:"var(--accent4)", pct:construction/total*100},
+    {label:"Soft",   val:soft,         color:"var(--accent3)", pct:soft/total*100},
+  ];
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+      {bars.map(b=>(
+        <div key={b.label}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text2)"}}>{b.label}</span>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:b.color}}>{fmtM(b.val)}</span>
+          </div>
+          <div style={{height:10,background:"var(--surface3)",borderRadius:6,overflow:"hidden"}}>
+            <div style={{height:"100%",borderRadius:6,background:b.color,width:b.pct+"%",transition:"width .6s cubic-bezier(.16,1,.3,1)",boxShadow:`0 0 8px ${b.color}66`}}/>
+          </div>
+        </div>
+      ))}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:4,fontFamily:"DM Mono",fontSize:10,color:"var(--text3)"}}>TOTAL {fmtM(total)}</div>
+    </div>
+  );
+}
+
+function ProcStep({ icon, label, sub, status, delay }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"var(--surface2)",borderRadius:10,border:`1px solid ${status==="done"?"rgba(0,255,163,.2)":status==="loading"?"rgba(0,229,255,.2)":"var(--border)"}`,transition:"border-color .4s",position:"relative",overflow:"hidden",animation:`slideRight .35s ${delay}s ease both`}}>
+      {status==="loading"&&<div style={{position:"absolute",top:0,left:0,right:0,height:1,background:"linear-gradient(90deg,transparent,var(--accent),transparent)",backgroundSize:"200% 100%",animation:"shimmer 1.2s linear infinite"}}/>}
+      <div style={{width:32,height:32,borderRadius:8,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,background:status==="done"?"rgba(0,255,163,.08)":status==="loading"?"rgba(0,229,255,.08)":"rgba(255,255,255,.02)",border:`1px solid ${status==="idle"?"var(--border)":status==="done"?"var(--accent2)":"var(--accent)"}`,transition:"all .4s"}}>
+        {status==="done"?"✓":status==="loading"?<PulseDots/>:icon}
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontFamily:"Syne",fontWeight:600,fontSize:12,color:status==="idle"?"var(--text3)":status==="done"?"var(--text)":"var(--accent)",transition:"color .4s"}}>{label}</div>
+        <div style={{fontFamily:"IBM Plex Sans",fontSize:10,color:"var(--text3)",marginTop:2}}>{sub}</div>
+      </div>
+      <div style={{fontFamily:"DM Mono",fontSize:8,letterSpacing:".08em",padding:"2px 6px",borderRadius:4,background:status==="done"?"rgba(0,255,163,.1)":status==="loading"?"rgba(0,229,255,.1)":"transparent",color:status==="done"?"var(--accent2)":status==="loading"?"var(--accent)":"var(--text3)",border:`1px solid ${status==="done"?"var(--accent2)":status==="loading"?"var(--accent)":"var(--border)"}`,transition:"all .4s",whiteSpace:"nowrap"}}>
+        {status==="done"?"SYNCED":status==="loading"?"FETCHING":"STANDBY"}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={{display:"block",fontFamily:"DM Mono",fontSize:9,letterSpacing:".1em",color:"var(--text3)",marginBottom:5}}>{label}</label>
+      {children}
+    </div>
+  );
+}
+const iStyle = {width:"100%",background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 12px",fontFamily:"DM Mono",fontSize:13,color:"var(--text)",outline:"none",transition:"border-color .2s"};
+
+function Tile({ label, value, sub, color, delay=0 }) {
+  return (
+    <div style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,padding:"14px 16px",animation:`fadeUp .5s ${delay}s ease both`}}>
+      <div style={{fontFamily:"IBM Plex Sans",fontSize:10,color:"var(--text3)",marginBottom:5}}>{label}</div>
+      <div style={{fontFamily:"DM Mono",fontSize:22,fontWeight:500,color:color||"var(--text)",letterSpacing:"-.01em"}}>{value}</div>
+      {sub&&<div style={{fontFamily:"IBM Plex Sans",fontSize:10,color:"var(--text3)",marginTop:3}}>{sub}</div>}
+    </div>
+  );
+}
+
+function DealRoomPanel({ open, onClose, dealName }) {
+  const investors = [
+    {name:"Apex Capital Partners",  commit:"$4.2M",status:"signed",   tier:"Lead"},
+    {name:"Meridian RE Fund III",   commit:"$2.8M",status:"pending",  tier:"Co-invest"},
+    {name:"Blackrock CRE Ventures", commit:"$1.5M",status:"reviewing",tier:"Co-invest"},
+    {name:"Harbor Bridge Equity",   commit:"$1.0M",status:"invited",  tier:"Minor"},
+  ];
+  const statusColor={signed:"var(--accent2)",pending:"var(--accent)",reviewing:"var(--accent3)",invited:"var(--text3)"};
+  const raised=7.0, target=9.5;
+  if(!open) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:100,animation:"overlayIn .2s ease"}}/>
+      <div style={{position:"fixed",top:0,right:0,bottom:0,width:440,maxWidth:"95vw",background:"var(--surface)",borderLeft:"1px solid var(--border2)",zIndex:101,display:"flex",flexDirection:"column",animation:"panelSlide .35s cubic-bezier(.16,1,.3,1)",overflowY:"auto"}}>
+        <div style={{padding:"20px 24px",borderBottom:"1px solid var(--border)",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:"var(--surface)",zIndex:10}}>
+          <div>
+            <div style={{fontFamily:"DM Mono",fontSize:9,letterSpacing:".1em",color:"var(--accent4)",marginBottom:4}}>// DEAL ROOM</div>
+            <div style={{fontFamily:"Syne",fontWeight:700,fontSize:16}}>{dealName}</div>
+          </div>
+          <button onClick={onClose} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,width:32,height:32,cursor:"pointer",color:"var(--text2)",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+        </div>
+        <div style={{padding:24,display:"flex",flexDirection:"column",gap:20}}>
+          <div style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:12,padding:18}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+              <span style={{fontFamily:"Syne",fontWeight:600,fontSize:13}}>Capital Raise</span>
+              <span style={{fontFamily:"DM Mono",fontSize:11,color:"var(--accent2)"}}>{fmtM(raised*1e6)} / {fmtM(target*1e6)}</span>
+            </div>
+            <div style={{height:8,background:"var(--surface3)",borderRadius:6,overflow:"hidden"}}>
+              <div style={{height:"100%",borderRadius:6,background:"linear-gradient(90deg,var(--accent),var(--accent2))",width:(raised/target*100)+"%",transition:"width 1s ease",boxShadow:"0 0 12px rgba(0,229,255,.4)"}}/>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
+              <span style={{fontFamily:"DM Mono",fontSize:9,color:"var(--text3)"}}>{(raised/target*100).toFixed(0)}% FUNDED</span>
+              <span style={{fontFamily:"DM Mono",fontSize:9,color:"var(--text3)"}}>{fmtM((target-raised)*1e6)} REMAINING</span>
+            </div>
+          </div>
+          <div>
+            <div style={{fontFamily:"DM Mono",fontSize:9,letterSpacing:".1em",color:"var(--text3)",marginBottom:10}}>INVESTOR ROSTER</div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {investors.map((inv,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",background:"var(--surface2)",borderRadius:8,border:"1px solid var(--border)",animation:`fadeUp .3s ${i*.07}s ease both`}}>
+                  <div>
+                    <div style={{fontFamily:"IBM Plex Sans",fontSize:12,color:"var(--text)"}}>{inv.name}</div>
+                    <div style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text3)",marginTop:2}}>{inv.tier} · {inv.commit}</div>
+                  </div>
+                  <div style={{fontFamily:"DM Mono",fontSize:9,letterSpacing:".06em",padding:"3px 8px",borderRadius:5,background:`${statusColor[inv.status]}15`,color:statusColor[inv.status],border:`1px solid ${statusColor[inv.status]}`}}>
+                    {inv.status.toUpperCase()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{background:"rgba(167,139,250,.06)",border:"1px solid rgba(167,139,250,.2)",borderRadius:10,padding:14}}>
+            <div style={{fontFamily:"DM Mono",fontSize:9,letterSpacing:".08em",color:"var(--accent4)",marginBottom:6}}>⚖ SEC SAFE HARBOR — SAAS MODEL</div>
+            <div style={{fontFamily:"IBM Plex Sans",fontSize:11,color:"var(--text2)",lineHeight:1.6}}>GroundUp operates as a SaaS platform, not a registered broker-dealer. Investors access deal materials directly, eliminating intermediary compliance risk under Reg D.</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {[{label:"📨  Send NDA to All Pending",color:"var(--accent)"},{label:"📋  Generate Subscription Docs",color:"var(--accent2)"},{label:"🔒  Lock Cap Table",color:"var(--accent3)"}].map((btn,i)=>(
+              <button key={i} onClick={()=>alert(`Demo: "${btn.label}" would trigger in production.`)} style={{width:"100%",padding:"11px",borderRadius:9,border:`1px solid ${btn.color}33`,background:`${btn.color}0d`,color:btn.color,fontFamily:"Syne",fontWeight:600,fontSize:12,cursor:"pointer",transition:"all .2s"}}
+                onMouseEnter={e=>e.currentTarget.style.background=`${btn.color}1a`}
+                onMouseLeave={e=>e.currentTarget.style.background=`${btn.color}0d`}
+              >{btn.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function LegalsTab() {
+  const [signed, setSigned] = useState({});
+  const [loading, setLoading] = useState(null);
+  const docs=[
+    {id:"psa",label:"Purchase & Sale Agreement",pages:24,api:"DocuSign API"},
+    {id:"loi",label:"Letter of Intent",          pages:6, api:"DocuSign API"},
+    {id:"ron",label:"Remote Online Notarization",pages:3, api:"Notarize API"},
+    {id:"lpa",label:"LP Agreement",              pages:41,api:"DocuSign API"},
+    {id:"env",label:"Environmental Disclosure",  pages:9, api:"EPA API"},
+  ];
+  const handleSign=(id)=>{
+    setLoading(id);
+    setTimeout(()=>{setLoading(null);setSigned(s=>({...s,[id]:true}));},1800);
+  };
+  return (
+    <div style={{maxWidth:860,margin:"0 auto",padding:"32px 32px",animation:"fadeUp .4s ease"}}>
+      <div style={{marginBottom:28}}>
+        <div style={{fontFamily:"DM Mono",fontSize:10,letterSpacing:".12em",color:"var(--accent3)",marginBottom:8}}>// 1-CLICK LEGALS</div>
+        <h2 style={{fontFamily:"Syne",fontWeight:800,fontSize:24,letterSpacing:"-.02em"}}>Document Center</h2>
+        <p style={{fontFamily:"IBM Plex Sans",fontSize:13,color:"var(--text2)",marginTop:6}}>API-powered signing. No printing. No notary appointment. Close from anywhere.</p>
+      </div>
+      <div style={{display:"flex",gap:10,marginBottom:24,flexWrap:"wrap"}}>
+        {[["DocuSign","var(--accent)"],["Notarize.com","var(--accent2)"],["Stripe Escrow","var(--accent3)"],["EPA Database","var(--accent4)"]].map(([name,c])=>(
+          <div key={name} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:"var(--surface2)",border:`1px solid ${c}33`,borderRadius:20}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:c,animation:"pulse-dot 2s ease-in-out infinite"}}/>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:c}}>{name}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {docs.map((doc,i)=>(
+          <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",background:"var(--surface)",border:`1px solid ${signed[doc.id]?"rgba(0,255,163,.2)":"var(--border)"}`,borderRadius:12,transition:"border-color .4s",animation:`fadeUp .4s ${i*.07}s ease both`}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:40,height:40,borderRadius:8,background:signed[doc.id]?"rgba(0,255,163,.08)":"var(--surface2)",border:`1px solid ${signed[doc.id]?"var(--accent2)":"var(--border)"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,transition:"all .4s"}}>
+                {signed[doc.id]?"✅":"📄"}
+              </div>
+              <div>
+                <div style={{fontFamily:"Syne",fontWeight:600,fontSize:13,color:signed[doc.id]?"var(--accent2)":"var(--text)"}}>{doc.label}</div>
+                <div style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text3)",marginTop:3}}>{doc.pages} pages · via {doc.api}</div>
+              </div>
+            </div>
+            <button onClick={()=>!signed[doc.id]&&handleSign(doc.id)} disabled={signed[doc.id]||loading===doc.id} style={{padding:"8px 18px",borderRadius:8,border:"none",cursor:signed[doc.id]?"default":"pointer",background:signed[doc.id]?"rgba(0,255,163,.12)":"linear-gradient(135deg,var(--accent),var(--accent2))",color:signed[doc.id]?"var(--accent2)":"#000",fontFamily:"Syne",fontWeight:700,fontSize:11,letterSpacing:".04em",transition:"all .3s",minWidth:110,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              {loading===doc.id?<><div style={{width:10,height:10,border:"2px solid #000",borderTopColor:"transparent",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>Signing...</>:signed[doc.id]?"✓ Signed":"1-Click Sign"}
+            </button>
+          </div>
+        ))}
+      </div>
+      {Object.keys(signed).length===docs.length&&(
+        <div style={{marginTop:20,padding:18,background:"rgba(0,255,163,.06)",border:"1px solid rgba(0,255,163,.2)",borderRadius:12,textAlign:"center",animation:"fadeUp .4s ease"}}>
+          <div style={{fontFamily:"Syne",fontWeight:700,fontSize:16,color:"var(--accent2)",marginBottom:4}}>🎉 All Documents Executed</div>
+          <div style={{fontFamily:"IBM Plex Sans",fontSize:12,color:"var(--text2)"}}>Deal is legally closed. Funds will be released from escrow within 2 business days.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeasibilityTab({ setDealRoomOpen }) {
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({address:"1400 5th Ave, New York, NY 10026",price:"12500000",assetClass:"Mixed-Use",units:"84",landPct:"28",constructPct:"52"});
+  const [steps, setSteps] = useState({zoning:"idle",labor:"idle",comps:"idle"});
+  const [analyzing, setAnalyzing] = useState(false);
+  const [done, setDone] = useState(false);
+  const [deckReady, setDeckReady] = useState(false);
+  const resultsRef = useRef(null);
+
+  const price   = parseFloat(form.price)||12500000;
+  const units   = parseInt(form.units)||84;
+  const landPct = clamp(parseFloat(form.landPct)||28,1,97);
+  const conPct  = clamp(parseFloat(form.constructPct)||52,1,97-landPct);
+  const softPct = 100-landPct-conPct;
+  const land    = price*landPct/100;
+  const constr  = price*conPct/100;
+  const soft    = price*softPct/100;
+  const irr     = clamp(10+(conPct-40)*0.3+(units-50)*0.02,8,32);
+  const capRate = 5.2+(units/100)*0.4;
+  const noi     = price*capRate/100;
+  const feasible= irr>=15;
+  const allSynced=steps.zoning==="done"&&steps.labor==="done"&&steps.comps==="done";
+
+  const runAnalysis=()=>{
+    if(analyzing)return;
+    setAnalyzing(true);setDone(false);setDeckReady(false);
+    setSteps({zoning:"loading",labor:"idle",comps:"idle"});
+    setTimeout(()=>setSteps(s=>({...s,labor:"loading"})),850);
+    setTimeout(()=>setSteps(s=>({...s,zoning:"done"})),1500);
+    setTimeout(()=>setSteps(s=>({...s,comps:"loading"})),1600);
+    setTimeout(()=>setSteps(s=>({...s,labor:"done"})),2300);
+    setTimeout(()=>setSteps(s=>({...s,comps:"done"})),3000);
+    setTimeout(()=>{setAnalyzing(false);setDone(true);setStep(3);setTimeout(()=>resultsRef.current?.scrollIntoView({behavior:"smooth"}),100);},3200);
+  };
+
+  return (
+    <div style={{padding:"32px 32px 60px",maxWidth:1300,margin:"0 auto"}}>
+      <div style={{marginBottom:28}}>
+        <div style={{fontFamily:"DM Mono",fontSize:10,letterSpacing:".12em",color:"var(--accent)",marginBottom:8}}>// FEASIBILITY BOT</div>
+        <h2 style={{fontFamily:"Syne",fontWeight:800,fontSize:24,letterSpacing:"-.02em"}}>Deal Analysis Wizard</h2>
+        <p style={{fontFamily:"IBM Plex Sans",fontSize:13,color:"var(--text2)",marginTop:6}}>Three steps from address to investor-ready output.</p>
+      </div>
+
+      {/* Step indicators */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:32,flexWrap:"wrap"}}>
+        <StepPill n="1" label="Deal Parameters" active={step===1} done={step>1}/>
+        <div style={{flex:1,minWidth:20,maxWidth:60,height:1,background:step>1?"var(--accent2)":"var(--border)",transition:"background .5s"}}/>
+        <StepPill n="2" label="API Analysis"    active={step===2} done={step>2}/>
+        <div style={{flex:1,minWidth:20,maxWidth:60,height:1,background:step>2?"var(--accent2)":"var(--border)",transition:"background .5s"}}/>
+        <StepPill n="3" label="Results & Output" active={step===3} done={false}/>
+      </div>
+
+      {/* STEP 1 */}
+      {step===1&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,animation:"slideRight .4s ease"}}>
+          <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:24}}>
+            <div style={{fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".06em",color:"var(--text2)",marginBottom:18,display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent)"}}/> DEAL PARAMETERS
+            </div>
+            <Field label="PROPERTY ADDRESS">
+              <input type="text" value={form.address} style={iStyle} onChange={e=>setForm(p=>({...p,address:e.target.value}))} onFocus={e=>e.target.style.borderColor="var(--accent)"} onBlur={e=>e.target.style.borderColor="var(--border)"}/>
+            </Field>
+            <Field label="PURCHASE PRICE ($)">
+              <input type="number" value={form.price} style={iStyle} onChange={e=>setForm(p=>({...p,price:e.target.value}))} onFocus={e=>e.target.style.borderColor="var(--accent)"} onBlur={e=>e.target.style.borderColor="var(--border)"}/>
+            </Field>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Field label="ASSET CLASS">
+                <select value={form.assetClass} style={{...iStyle,appearance:"none",cursor:"pointer"}} onChange={e=>setForm(p=>({...p,assetClass:e.target.value}))}>
+                  {["Mixed-Use","Multifamily","Retail","Office","Industrial"].map(v=><option key={v}>{v}</option>)}
+                </select>
+              </Field>
+              <Field label="TOTAL UNITS">
+                <input type="number" value={form.units} style={iStyle} onChange={e=>setForm(p=>({...p,units:e.target.value}))} onFocus={e=>e.target.style.borderColor="var(--accent)"} onBlur={e=>e.target.style.borderColor="var(--border)"}/>
+              </Field>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Field label={`LAND COST % — ${landPct}%`}>
+                <input type="range" min="5" max="60" value={landPct} style={{width:"100%",accentColor:"var(--accent)"}} onChange={e=>setForm(p=>({...p,landPct:e.target.value}))}/>
+              </Field>
+              <Field label={`CONSTRUCTION % — ${conPct}%`}>
+                <input type="range" min="20" max="75" value={conPct} style={{width:"100%",accentColor:"var(--accent4)"}} onChange={e=>setForm(p=>({...p,constructPct:e.target.value}))}/>
+              </Field>
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:24}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".06em",color:"var(--text2)",marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent3)"}}/> LIVE COST PREVIEW
+              </div>
+              <LiveBarChart land={land} construction={constr} soft={soft}/>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Tile label="Price / Unit" value={"$"+fmt(Math.round(price/units))} color="var(--accent)"  delay={0}/>
+              <Tile label="Soft Cost %"  value={softPct.toFixed(1)+"%"}           color="var(--accent3)" delay={.05}/>
+              <Tile label="Total Units"  value={form.units}                        color="var(--text)"    delay={.1}/>
+              <Tile label="Asset Class"  value={form.assetClass}                   color="var(--accent4)" delay={.15}/>
+            </div>
+            <button onClick={()=>setStep(2)} style={{width:"100%",padding:13,borderRadius:10,border:"none",cursor:"pointer",background:"linear-gradient(135deg,var(--accent),var(--accent2))",color:"#000",fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".03em",boxShadow:"0 0 24px rgba(0,229,255,.25)",transition:"opacity .2s"}}
+              onMouseEnter={e=>e.currentTarget.style.opacity=".85"}
+              onMouseLeave={e=>e.currentTarget.style.opacity="1"}
+            >Continue to API Analysis →</button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2 */}
+      {step===2&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,animation:"slideRight .4s ease"}}>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:24}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".06em",color:"var(--text2)",marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent2)"}}/> API DATA FABRIC
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:9}}>
+                <ProcStep icon="🗺" label="Live Zoning Data"  sub="NYC PLUTO · Zoning Resolution API · FAR limits" status={steps.zoning} delay={0}/>
+                <ProcStep icon="🔧" label="Local Labor Rates" sub="BLS OEWS · RSMeans · Union hall schedules"       status={steps.labor}  delay={.05}/>
+                <ProcStep icon="📊" label="Rent Comps"        sub="CoStar · Yardi Matrix · LoopNet live feed"      status={steps.comps}  delay={.1}/>
+              </div>
+            </div>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:18,fontFamily:"DM Mono",fontSize:10,minHeight:90}}>
+              <div style={{color:"var(--accent)",letterSpacing:".08em",marginBottom:8}}>// SYSTEM LOG</div>
+              {!analyzing&&!allSynced&&<div style={{color:"var(--text3)"}}>→ awaiting run command...</div>}
+              {analyzing&&<div style={{color:"var(--accent)",animation:"blink 1s step-end infinite"}}>▌ fetching market data...</div>}
+              {allSynced&&<><div style={{color:"var(--accent2)"}}>✓ 3 sources resolved in 3.1s</div><div style={{color:"var(--accent2)"}}>✓ confidence threshold 91%</div><div style={{color:"var(--text2)",marginTop:4}}>→ model output ready</div></>}
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:24}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".06em",color:"var(--text2)",marginBottom:16,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent4)"}}/> DATA CONFIDENCE SCORES
+              </div>
+              {[{label:"Zoning Accuracy",pct:allSynced?91:0,color:"var(--accent)"},{label:"Labor Rate Match",pct:allSynced?87:0,color:"var(--accent4)"},{label:"Comp Coverage",pct:allSynced?94:0,color:"var(--accent2)"}].map(g=>(
+                <div key={g.label} style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                    <span style={{fontFamily:"IBM Plex Sans",fontSize:11,color:"var(--text2)"}}>{g.label}</span>
+                    <span style={{fontFamily:"DM Mono",fontSize:11,color:g.color}}>{g.pct}%</span>
+                  </div>
+                  <div style={{height:6,background:"var(--surface3)",borderRadius:6,overflow:"hidden"}}>
+                    <div style={{height:"100%",borderRadius:6,background:g.color,width:g.pct+"%",transition:"width 1.2s ease",boxShadow:`0 0 8px ${g.color}66`}}/>
+                  </div>
+                </div>
+              ))}
+              {!allSynced&&<div style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text3)",textAlign:"center",marginTop:8}}>RUN ANALYSIS TO POPULATE</div>}
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setStep(1)} style={{flex:1,padding:12,borderRadius:10,border:"1px solid var(--border)",background:"var(--surface2)",color:"var(--text2)",fontFamily:"Syne",fontWeight:600,fontSize:12,cursor:"pointer"}}>← Back</button>
+              <button onClick={runAnalysis} disabled={analyzing} style={{flex:2,padding:12,borderRadius:10,border:"none",cursor:analyzing?"not-allowed":"pointer",background:analyzing?"var(--surface2)":"linear-gradient(135deg,var(--accent),var(--accent2))",color:analyzing?"var(--text3)":"#000",fontFamily:"Syne",fontWeight:700,fontSize:13,letterSpacing:".03em",transition:"all .3s",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:analyzing?"none":"0 0 20px rgba(0,229,255,.25)"}}>
+                {analyzing?<><div style={{width:12,height:12,border:"2px solid var(--text3)",borderTopColor:"transparent",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>Analyzing...</>:"⚡ Run Analysis"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3 */}
+      {step===3&&(
+        <div ref={resultsRef} style={{animation:"slideRight .4s ease"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr",gap:16,marginBottom:16}}>
+            {/* IRR Hero */}
+            <div style={{background:"var(--surface)",border:`1px solid ${feasible?"rgba(0,255,163,.25)":"rgba(255,77,109,.2)"}`,borderRadius:16,padding:28,position:"relative",overflow:"hidden",gridRow:"span 2"}}>
+              <div style={{position:"absolute",top:-30,right:-30,width:140,height:140,borderRadius:"50%",background:`radial-gradient(circle,${feasible?"rgba(0,255,163,.1)":"rgba(255,77,109,.08)"} 0%,transparent 70%)`,pointerEvents:"none"}}/>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div style={{fontFamily:"DM Mono",fontSize:9,letterSpacing:".1em",color:"var(--text3)"}}>PROJECTED IRR · 5-YR LEVERED</div>
+                <div style={{padding:"5px 12px",borderRadius:8,background:feasible?"rgba(0,255,163,.12)":"rgba(255,77,109,.12)",border:`1px solid ${feasible?"var(--accent2)":"var(--red)"}`,fontFamily:"Syne",fontWeight:700,fontSize:10,color:feasible?"var(--accent2)":"var(--red)",letterSpacing:".08em"}}>
+                  {feasible?"✓ FEASIBLE":"⚠ REVIEW"}
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"flex-end",gap:3,marginBottom:6}}>
+                <span style={{fontFamily:"Syne",fontWeight:800,fontSize:80,letterSpacing:"-.04em",lineHeight:1,color:feasible?"var(--accent2)":"var(--red)"}}>
+                  <Counter target={irr} decimals={1} running={done}/>
+                </span>
+                <span style={{fontFamily:"Syne",fontWeight:600,fontSize:36,color:feasible?"var(--accent2)":"var(--red)",paddingBottom:10}}>%</span>
+              </div>
+              <div style={{fontFamily:"IBM Plex Sans",fontSize:12,color:"var(--text3)",marginBottom:16}}>
+                {feasible?`Exceeds 15% hurdle by ${(irr-15).toFixed(1)} pts`:"Below 15% hurdle rate — adjust parameters"}
+              </div>
+              <div style={{height:3,borderRadius:4,overflow:"hidden",background:"var(--surface3)",marginBottom:20}}>
+                <div style={{height:"100%",borderRadius:4,background:feasible?"var(--accent2)":"var(--red)",width:clamp(irr/35*100,0,100)+"%",transition:"width 1.5s ease"}}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {[{l:"Equity Multiple",v:done?(1.8+irr/20).toFixed(1)+"×":"—",c:"var(--accent)"},{l:"Cap Rate",v:done?capRate.toFixed(1)+"%":"—",c:"var(--accent4)"},{l:"NOI Year 1",v:done?fmtM(noi):"—",c:"var(--text)"},{l:"Price / Unit",v:done?"$"+fmt(Math.round(price/units)):"—",c:"var(--accent3)"}].map(m=>(
+                  <div key={m.l} style={{background:"var(--surface2)",borderRadius:8,padding:"10px 12px"}}>
+                    <div style={{fontFamily:"IBM Plex Sans",fontSize:10,color:"var(--text3)",marginBottom:4}}>{m.l}</div>
+                    <div style={{fontFamily:"DM Mono",fontSize:14,color:m.c,animation:done?"numberPop .5s ease":"none"}}>{m.v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Cost breakdown */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:22}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--text2)",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent3)"}}/> COST STRUCTURE
+              </div>
+              <LiveBarChart land={land} construction={constr} soft={soft}/>
+            </div>
+
+            {/* Actions */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:22,display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--text2)",marginBottom:4,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent4)"}}/> NEXT ACTIONS
+              </div>
+              {[{icon:"📄",label:"Generate Pitch Deck",color:"var(--accent3)",action:()=>setDeckReady(true)},{icon:"🤝",label:"Open Deal Room",color:"var(--accent4)",action:()=>setDealRoomOpen(true)},{icon:"⚙️",label:"Adjust Parameters",color:"var(--accent)",action:()=>{setStep(1);setDone(false);setSteps({zoning:"idle",labor:"idle",comps:"idle"});}}].map(btn=>(
+                <button key={btn.label} onClick={btn.action} style={{width:"100%",padding:"11px 14px",borderRadius:9,border:`1px solid ${btn.color}33`,background:`${btn.color}0d`,color:btn.color,fontFamily:"Syne",fontWeight:600,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:8,transition:"all .2s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.background=`${btn.color}1f`;e.currentTarget.style.borderColor=`${btn.color}66`;}}
+                  onMouseLeave={e=>{e.currentTarget.style.background=`${btn.color}0d`;e.currentTarget.style.borderColor=`${btn.color}33`;}}
+                ><span style={{fontSize:16}}>{btn.icon}</span>{btn.label}</button>
+              ))}
+              {deckReady&&<div style={{fontFamily:"DM Mono",fontSize:9,color:"var(--accent3)",textAlign:"center",padding:8,background:"rgba(255,107,53,.06)",borderRadius:8,animation:"fadeIn .3s ease"}}>GroundUp_Feasibility.pdf · 14 slides ready</div>}
+            </div>
+
+            {/* Sensitivity table */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:22,gridColumn:"2 / span 2"}}>
+              <div style={{fontFamily:"Syne",fontWeight:700,fontSize:12,letterSpacing:".06em",color:"var(--text2)",marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent2)"}}/> IRR SENSITIVITY — PRICE VS UNITS
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"DM Mono",fontSize:10}}>
+                  <thead>
+                    <tr>
+                      <th style={{padding:"6px 10px",textAlign:"left",color:"var(--text3)",borderBottom:"1px solid var(--border)"}}>Price \ Units</th>
+                      {[60,80,100,120].map(u=><th key={u} style={{padding:"6px 10px",textAlign:"center",color:"var(--text3)",borderBottom:"1px solid var(--border)"}}>{u} units</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[.85,.95,1.0,1.1].map(mult=>{
+                      const p2=price*mult;
+                      return(
+                        <tr key={mult}>
+                          <td style={{padding:"7px 10px",color:"var(--text2)",borderBottom:"1px solid var(--border)"}}>{fmtM(p2)}</td>
+                          {[60,80,100,120].map(u=>{
+                            const r=clamp(10+(conPct-40)*0.3+(u-50)*0.02-(mult-1)*15,5,35);
+                            const hi=r>=18,ok=r>=15;
+                            return <td key={u} style={{padding:"7px 10px",textAlign:"center",borderBottom:"1px solid var(--border)",color:hi?"var(--accent2)":ok?"var(--accent)":"var(--red)",background:hi?"rgba(0,255,163,.05)":ok?"rgba(0,229,255,.03)":"rgba(255,77,109,.04)"}}>{r.toFixed(1)}%</td>;
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState("feasibility");
+  const [dealRoomOpen, setDealRoomOpen] = useState(false);
+  const dealName = "1400 5th Ave — Mixed-Use";
+  const tabs=[{id:"feasibility",label:"Feasibility Bot",dot:"var(--accent)"},{id:"dealroom",label:"Deal Room",dot:"var(--accent4)"},{id:"legals",label:"1-Click Legals",dot:"var(--accent3)"}];
+  return (
+    <div style={{minHeight:"100vh",background:"var(--bg)",position:"relative"}}>
+      <div style={{position:"fixed",inset:0,backgroundImage:"linear-gradient(rgba(0,229,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.025) 1px,transparent 1px)",backgroundSize:"52px 52px",pointerEvents:"none",zIndex:0}}/>
+      {/* Header */}
+      <div style={{position:"sticky",top:0,zIndex:50,background:"rgba(6,10,14,.94)",backdropFilter:"blur(20px)",borderBottom:"1px solid var(--border)"}}>
+        <div style={{maxWidth:1300,margin:"0 auto",padding:"0 32px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:32,height:32,borderRadius:8,background:"linear-gradient(135deg,var(--accent),var(--accent2))",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Syne",fontWeight:800,fontSize:14,color:"#000"}}>G</div>
+            <span style={{fontFamily:"Syne",fontWeight:800,fontSize:18,letterSpacing:"-.02em"}}>GroundUp</span>
+            <div style={{width:1,height:16,background:"var(--border)",margin:"0 4px"}}/>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text3)",letterSpacing:".06em"}}>OS FOR CRE DEVELOPERS</span>
+          </div>
+          <div style={{display:"flex",gap:4}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setActiveTab(t.id)} style={{padding:"6px 16px",borderRadius:8,border:"none",cursor:"pointer",background:activeTab===t.id?"var(--surface2)":"transparent",color:activeTab===t.id?"var(--text)":"var(--text3)",fontFamily:"Syne",fontWeight:600,fontSize:12,display:"flex",alignItems:"center",gap:7,transition:"all .2s",outline:activeTab===t.id?"1px solid var(--border2)":"none"}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:activeTab===t.id?t.dot:"var(--text3)",transition:"background .2s"}}/>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:"var(--accent2)",animation:"pulse-dot 2s ease-in-out infinite"}}/>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text2)",letterSpacing:".05em"}}>LIVE</span>
+            <span style={{fontFamily:"DM Mono",fontSize:10,color:"var(--text3)",marginLeft:6}}>{new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</span>
+          </div>
+        </div>
+      </div>
+      {/* Content */}
+      <div style={{position:"relative",zIndex:1}}>
+        {activeTab==="feasibility"&&<FeasibilityTab setDealRoomOpen={setDealRoomOpen}/>}
+        {activeTab==="dealroom"&&(
+          <div style={{maxWidth:860,margin:"0 auto",padding:"32px",animation:"fadeUp .4s ease"}}>
+            <div style={{marginBottom:28}}>
+              <div style={{fontFamily:"DM Mono",fontSize:10,letterSpacing:".12em",color:"var(--accent4)",marginBottom:8}}>// DEAL ROOM</div>
+              <h2 style={{fontFamily:"Syne",fontWeight:800,fontSize:24,letterSpacing:"-.02em"}}>Investor Portal</h2>
+              <p style={{fontFamily:"IBM Plex Sans",fontSize:13,color:"var(--text2)",marginTop:6}}>Manage your cap table and investor communications — no broker-dealer required.</p>
+            </div>
+            <button onClick={()=>setDealRoomOpen(true)} style={{padding:"13px 28px",borderRadius:10,border:"none",cursor:"pointer",background:"linear-gradient(135deg,var(--accent4),var(--accent))",color:"#000",fontFamily:"Syne",fontWeight:700,fontSize:13,boxShadow:"0 0 24px rgba(167,139,250,.3)",marginBottom:28}}>
+              🤝  Open Deal Room for {dealName}
+            </button>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:16,padding:28}}>
+              <div style={{fontFamily:"IBM Plex Sans",fontSize:13,color:"var(--text2)",lineHeight:1.8}}>
+                The Deal Room is GroundUp's investor-facing portal. Because GroundUp operates as a <strong style={{color:"var(--text)"}}>SaaS platform</strong> rather than a registered broker-dealer, developers can share deal materials, collect commitments, and manage their cap table directly — eliminating the 5–8% placement agent fee and SEC intermediary risk under Regulation D.
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab==="legals"&&<LegalsTab/>}
+      </div>
+      <DealRoomPanel open={dealRoomOpen} onClose={()=>setDealRoomOpen(false)} dealName={dealName}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
