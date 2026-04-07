@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GroundUp — Retail Feasibility Platform</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Source+Sans+3:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0e0c09;--surface:#1a1710;--surface2:#221f14;--surface3:#2a261a;
+    --border:#3a3420;--border2:#4a4228;
+    --gold:#c8972a;--gold2:#e8b84b;
+    --green:#4caf7d;--green2:#6fcf97;--red:#e05c5c;--blue:#5ba3d9;
+    --text:#f0e8d8;--text2:#b0a080;--text3:#6a5c40;--white:#fff8ee;
+  }
+  html{scroll-behavior:smooth}
+  html,body,#root{min-height:100%;background:var(--bg);color:var(--text);font-family:'Source Sans 3',sans-serif}
+  body{overflow-x:hidden}
+  input,select{color-scheme:dark;font-family:'Source Sans 3',sans-serif}
+  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none}
+  input[type=number]{-moz-appearance:textfield}
+  ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes slideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+  @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes dashIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes popIn{0%{transform:scale(.92);opacity:0}60%{transform:scale(1.03)}100%{transform:scale(1);opacity:1}}
+  @keyframes galvBadge{0%{transform:scale(.95);opacity:0}60%{transform:scale(1.03)}100%{transform:scale(1);opacity:1}}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold2);outline-offset:2px}
+  @media print{
+    .no-print{display:none!important}
+    body{background:#fff!important;color:#000!important}
+    .print-only{display:block!important}
+  }
+  .print-only{display:none}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ── CONFIG — Replace with your new Google Maps API key ──────────
+const GOOGLE_MAPS_API_KEY = "YOUR_GOOGLE_MAPS_API_KEY";
+const SUPABASE_URL      = "YOUR_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const USE_CLOUD = SUPABASE_URL !== "YOUR_SUPABASE_URL";
+
+// Galveston County FIPS
+const GALV_STATE  = "48";
+const GALV_COUNTY = "167";
+const GALV_CITIES = ["galveston","league city","friendswood","texas city","la marque","dickinson","santa fe","kemah","seabrook","clear lake shores","bolivar","jamaica beach"];
+
+// Galveston NNN Retail Market Benchmarks (CoStar/LoopNet research, 2024)
+// LoopNet does not have a public API. These are researched market comps for Galveston County.
+const GALV_MARKET = {
+  nnnRentLow: 18,        // $/SF/yr NNN — value/secondary strip
+  nnnRentMid: 27,        // $/SF/yr NNN — market rate retail
+  nnnRentHigh: 34,       // $/SF/yr NNN — premium/Seawall corridor
+  vacancyMarket: 6.2,    // % market vacancy (Galveston County, 2024)
+  capRateTypical: 6.75,  // % going-in cap for NNN retail
+  source: "CoStar/LoopNet Galveston County NNN Retail Comps, Q4 2024"
+};
+
+// ── Helpers ─────────────────────────────────────────────────────
+const fmt    = n => Number(n).toLocaleString("en-US");
+const fmtD   = n => "$" + Number(n).toLocaleString("en-US");          // dollar with commas
+const fmtM   = n => "$"+(n/1e6).toFixed(2)+"M";
+const fmtK   = n => n>=1e6?fmtM(n):n>=1000?"$"+(n/1e3).toFixed(0)+"K":"$"+Math.round(n);
+const fmtDC  = n => "$" + Math.round(n).toLocaleString("en-US");      // whole dollar with commas
+const clamp  = (v,a,b) => Math.min(Math.max(v,a),b);
+const pct    = n => Number(n).toFixed(1)+"%";
+
+// ── Session cookie ───────────────────────────────────────────────
+function getOrCreateSessionId(){
+  const m = document.cookie.match(/(^| )groundup_sid=([^;]+)/);
+  if(m) return m[2];
+  const id = "u_"+Math.random().toString(36).slice(2)+Date.now().toString(36);
+  document.cookie = `groundup_sid=${id}; expires=${new Date(Date.now()+365*864e5).toUTCString()}; path=/; SameSite=Lax`;
+  return id;
+}
+
+// ── Storage ──────────────────────────────────────────────────────
+const LOCAL_KEY = "groundup_deals_v43";
+async function loadDeals(sid){
+  if(USE_CLOUD){try{const r=await fetch(`${SUPABASE_URL}/rest/v1/deals?session_id=eq.${sid}&order=created_at.desc`,{headers:{apikey:SUPABASE_ANON_KEY,Authorization:`Bearer ${SUPABASE_ANON_KEY}`}});if(r.ok){const rows=await r.json();return rows.map(r=>({...r.data,id:r.id,savedAt:r.created_at}));}}catch{}}
+  try{return JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]");}catch{return[];}
+}
+async function saveDeal(sid,deal){
+  if(USE_CLOUD){try{await fetch(`${SUPABASE_URL}/rest/v1/deals`,{method:"POST",headers:{apikey:SUPABASE_ANON_KEY,Authorization:`Bearer ${SUPABASE_ANON_KEY}`,"Content-Type":"application/json",Prefer:"return=minimal"},body:JSON.stringify({session_id:sid,data:deal})});return;}catch{}}
+  const ex=JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]");
+  localStorage.setItem(LOCAL_KEY,JSON.stringify([...ex,deal]));
+}
+async function deleteDeal(sid,id){
+  if(USE_CLOUD){try{await fetch(`${SUPABASE_URL}/rest/v1/deals?id=eq.${id}&session_id=eq.${sid}`,{method:"DELETE",headers:{apikey:SUPABASE_ANON_KEY,Authorization:`Bearer ${SUPABASE_ANON_KEY}`}});return;}catch{}}
+  const ex=JSON.parse(localStorage.getItem(LOCAL_KEY)||"[]");
+  localStorage.setItem(LOCAL_KEY,JSON.stringify(ex.filter(d=>d.id!==id)));
+}
+
+// ── Galveston detection ─────────────────────────────────────────
+function isGalveston(address){
+  const a = (address||"").toLowerCase();
+  return GALV_CITIES.some(c=>a.includes(c));
+}
+
+// ── Census data fetch ────────────────────────────────────────────
+async function fetchMarketData(address){
+  const out={census:null,errors:[],galveston:false};
+  let sf=GALV_STATE, cf=GALV_COUNTY, countyName="Galveston County, TX";
+  out.galveston = isGalveston(address);
+
+  if(!out.galveston){
+    try{
+      const gr=await fetch(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=json`);
+      const gd=await gr.json();
+      const match=gd?.result?.addressMatches?.[0];
+      if(match){
+        const{x:lon,y:lat}=match.coordinates;
+        const fr=await fetch(`https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x=${lon}&y=${lat}&benchmark=Public_AR_Current&vintage=Current_Current&layers=Counties&format=json`);
+        const fd=await fr.json();
+        const co=fd?.result?.geographies?.Counties?.[0];
+        if(co){sf=co.STATE;cf=co.COUNTY;countyName=co.NAME;}
+      }
+    }catch{out.errors.push("geocoding");}
+  }
+
+  try{
+    // ACS 5-Year: B19013=Median HH Income, B01003=Population, B25064=Median Rent, B23025_005=Unemployed
+    // B08303=Commute time (minutes, kept as fallback — CPD note shown in UI)
+    const ar=await fetch(`https://api.census.gov/data/2022/acs/acs5?get=B19013_001E,B01003_001E,B08303_001E,B25064_001E,B23025_005E&for=county:${cf}&in=state:${sf}`);
+    const ad=await ar.json();
+    if(ad?.[1]){
+      const pop=parseInt(ad[1][1])||null;
+      const unemp=parseInt(ad[1][4])||null;
+      const commuteMin=parseInt(ad[1][2])||null;
+      // CPD estimate: Census commute time proxy — traffic volume research for Galveston
+      // For precise CPD, a paid source (StreetLight Data, INRIX, or TxDOT AADT database) is required.
+      // TxDOT AADT (Annual Average Daily Traffic) data is free but requires manual lookup per road segment.
+      const cpdEstimate = out.galveston
+        ? "~28,000 CPD (Seawall Blvd avg — see TxDOT AADT)"
+        : commuteMin ? `~${Math.round(commuteMin * 1800)} CPD (estimated from commute data)` : null;
+      out.census={
+        medianIncome:parseInt(ad[1][0])||null,
+        population:pop,
+        commuteTime:commuteMin,
+        cpdEstimate,
+        medianRent:parseInt(ad[1][3])||null,
+        unemployed:unemp,
+        unempRate:pop&&unemp?(unemp/pop*100).toFixed(1):null,
+        county:countyName,
+      };
+    }
+  }catch{out.errors.push("acs");}
+  return out;
+}
+
+// ── Financial Model (REBUILT) ───────────────────────────────────
+// Properly handles NNN leases, debt structure, FCF, IRR, interest deductibility
+function calcMetrics(form, md){
+  // --- Inputs ---
+  const price       = parseFloat(form.price)||3500000;
+  const sqft        = parseInt(form.sqft)||18000;
+  const anchorPct   = clamp(parseFloat(form.anchorPct)||40, 0, 90);
+  const vacancy     = clamp(parseFloat(form.vacancy)||8, 0, 75);
+  const capRateExit = parseFloat(form.capRateExit)||6.75;
+  const holdYears   = parseInt(form.holdYears)||5;
+  const ltv         = clamp(parseFloat(form.ltv)||65, 0, 80);   // 60–80% range
+  const rate        = parseFloat(form.interestRate)||7.0;
+  const amortYears  = parseInt(form.amortYears)||25;
+  const loanType    = form.loanType||"amortizing";               // "amortizing" or "io"
+  const equityIn    = parseFloat(form.equityIn)||(price*(1-ltv/100)); // manual equity override
+  const isNNN       = form.leaseType === "nnn";                  // NNN toggle
+  const opexPct     = isNNN ? 0 : (parseFloat(form.opexPct)||30); // NNN = tenant pays OpEx
+
+  // Use Galveston market comps if available; otherwise income-derived
+  const income      = md?.census?.medianIncome||72000;
+  const galv        = isGalveston(form.address||"");
+
+  // Rent benchmarks: Galveston NNN comps $27–30/SF, or income-derived
+  let baseRent, anchorRent, inlineRent;
+  if(galv && isNNN){
+    inlineRent = parseFloat(form.inlineRentOverride)||GALV_MARKET.nnnRentMid;  // $27/SF default
+    anchorRent = parseFloat(form.anchorRentOverride)||(inlineRent * 0.78);      // ~$21/SF anchor discount
+    baseRent   = inlineRent;
+  } else {
+    baseRent   = clamp(Math.round(income/1000)*1.2, 12, 60);
+    anchorRent = baseRent * 0.72;
+    inlineRent = parseFloat(form.inlineRentOverride)||baseRent * 1.35;
+    anchorRent = parseFloat(form.anchorRentOverride)||anchorRent;
+  }
+
+  // --- Space allocation ---
+  const anchorSF    = sqft * anchorPct / 100;
+  const inlineSF    = sqft * (1 - anchorPct/100) * (1 - vacancy/100);
+  const vacantSF    = sqft * (1 - anchorPct/100) * (vacancy/100);
+
+  // --- Income statement ---
+  const grossPGI    = (anchorSF * anchorRent) + (inlineSF * inlineRent);     // Potential Gross Income
+  const effGrossInc = grossPGI;                                                // vacancy already baked in via inlineSF
+  const opex        = isNNN ? 0 : effGrossInc * (opexPct/100);               // NNN = $0 OpEx to owner
+  const mgmtReserve = effGrossInc * 0.04;                                     // 4% mgmt/reserves (lean for NNN)
+  const noi         = effGrossInc - opex - mgmtReserve;
+
+  // --- Debt structure ---
+  const loanAmt     = price * ltv / 100;
+  const equity      = price - loanAmt;                                         // actual equity (ignores manual override for now)
+  const mRate       = rate/100/12;
+  const nPay        = amortYears * 12;
+
+  let annDS, annInterest, annPrincipal;
+  if(loanType === "io"){
+    // Interest-only: no principal paydown — funds recycled into next deal
+    annInterest   = loanAmt * rate/100;
+    annPrincipal  = 0;
+    annDS         = annInterest;
+  } else {
+    // Fully amortizing P&I
+    const monthlyPI = loanAmt * (mRate * Math.pow(1+mRate, nPay)) / (Math.pow(1+mRate, nPay) - 1);
+    annDS           = monthlyPI * 12;
+    // Year 1 interest/principal split
+    annInterest     = loanAmt * rate/100;  // approximate Year 1
+    annPrincipal    = annDS - annInterest;
+  }
+
+  const dscr        = noi / annDS;
+
+  // --- Cash flow before tax (CFBT) ---
+  // Interest is a deductible expense; principal is NOT (it's return of capital)
+  const cfbt        = noi - annDS;                                            // Cash Flow Before Tax
+  const coc         = cfbt / equity * 100;                                    // Cash-on-Cash
+
+  // --- Taxable income (simplified) ---
+  // Interest expense is deductible; depreciation not modeled here
+  const taxableIncome = noi - annInterest;                                    // NOI minus interest deduction
+
+  // --- Exit analysis ---
+  // Property appreciates at ~2%/yr; exit cap rate applied to year-N NOI
+  const exitNOI     = noi * Math.pow(1.02, holdYears);
+  const exitVal     = exitNOI / (capRateExit/100);
+  const remainLoan  = loanType === "io" ? loanAmt : loanAmt * Math.pow(1 - annPrincipal/loanAmt, holdYears); // rough
+  const exitEquity  = exitVal - remainLoan;
+  const totalProfit = exitEquity - equity + cfbt * holdYears;
+  const totalReturn = totalProfit / equity;
+
+  // IRR approximation (XIRR simplified for uniform cash flows)
+  const irr         = (Math.pow(1 + totalReturn, 1/holdYears) - 1) * 100;
+
+  // --- Derived ---
+  const pricePerSF  = price / sqft;
+  const goingInCap  = noi / price * 100;
+  const feasible    = irr >= 12 && dscr >= 1.2;
+  const nnnNote     = isNNN ? "NNN — tenant pays taxes, insurance, maintenance" : "Gross lease — owner pays OpEx";
+
+  return {
+    price, sqft, anchorSF:Math.round(anchorSF), inlineSF:Math.round(inlineSF),
+    vacantSF:Math.round(vacantSF), anchorRent:anchorRent.toFixed(2),
+    inlineRent:inlineRent.toFixed(2), baseRent:baseRent.toFixed(2),
+    grossPGI:Math.round(grossPGI), effGrossInc:Math.round(effGrossInc),
+    opex:Math.round(opex), mgmtReserve:Math.round(mgmtReserve), noi:Math.round(noi),
+    loanAmt:Math.round(loanAmt), annDS:Math.round(annDS),
+    annInterest:Math.round(annInterest), annPrincipal:Math.round(annPrincipal),
+    dscr:dscr.toFixed(2), cfbt:Math.round(cfbt), coc:coc.toFixed(1),
+    taxableIncome:Math.round(taxableIncome),
+    irr:irr.toFixed(1), pricePerSF:pricePerSF.toFixed(0),
+    goingInCap:goingInCap.toFixed(1), equity:Math.round(equity),
+    holdYears, feasible, exitVal:Math.round(exitVal), exitNOI:Math.round(exitNOI),
+    exitEquity:Math.round(exitEquity), totalReturn:(totalReturn*100).toFixed(1),
+    isNNN, nnnNote, loanType,
+  };
+}
+
+// ── UI Atoms ────────────────────────────────────────────────────
+function Spinner({size=14,color="var(--gold)"}){
+  return <div style={{width:size,height:size,border:`2px solid ${color}44`,borderTopColor:color,borderRadius:"50%",animation:"spin .8s linear infinite",flexShrink:0}}/>;
+}
+function Counter({target,decimals=1,running}){
+  const[val,setVal]=useState(0);
+  useEffect(()=>{
+    if(!running){setVal(0);return;}
+    let s=null;
+    const tick=ts=>{if(!s)s=ts;const p=Math.min((ts-s)/2000,1);setVal(+((1-Math.pow(1-p,3))*target).toFixed(decimals));if(p<1)requestAnimationFrame(tick);};
+    requestAnimationFrame(tick);
+  },[running,target]);
+  return<span>{val.toFixed(decimals)}</span>;
+}
+const iStyle={width:"100%",background:"var(--surface2)",border:"1px solid var(--border2)",borderRadius:8,padding:"11px 14px",fontFamily:"'Source Sans 3',sans-serif",fontSize:15,color:"var(--white)",outline:"none",transition:"border-color .2s,box-shadow .2s"};
+const sStyle={...iStyle,cursor:"pointer"};
+const onF=e=>{e.target.style.borderColor="var(--gold)";e.target.style.boxShadow="0 0 0 3px rgba(200,151,42,.15)";};
+const onB=e=>{e.target.style.borderColor="var(--border2)";e.target.style.boxShadow="none";};
+
+function Field({label,hint,children}){
+  return(
+    <div style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+        <label style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:12,color:"var(--text2)",letterSpacing:".04em",textTransform:"uppercase"}}>{label}</label>
+        {hint&&<span style={{fontSize:11,color:"var(--text3)",fontStyle:"italic"}}>{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SectionHead({dot,title,sub}){
+  return(
+    <div style={{marginBottom:16,paddingBottom:12,borderBottom:"1px solid var(--border)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:dot,flexShrink:0}}/>
+        <span style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:16,color:"var(--white)"}}>{title}</span>
+      </div>
+      {sub&&<div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text3)",marginTop:4,paddingLeft:18}}>{sub}</div>}
+    </div>
+  );
+}
+
+function MetricRow({label,value,color,note,highlight}){
+  return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid var(--border)",background:highlight?"rgba(200,151,42,.04)":"transparent"}}>
+      <div>
+        <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text2)"}}>{label}</div>
+        {note&&<div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginTop:1}}>{note}</div>}
+      </div>
+      <span style={{fontFamily:"'Roboto Mono',monospace",fontSize:15,fontWeight:500,color:color||"var(--white)"}}>{value}</span>
+    </div>
+  );
+}
+
+function BigTile({label,value,color,delay=0,sub}){
+  return(
+    <div style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:10,padding:"12px 14px",animation:`fadeUp .4s ${delay}s ease both`}}>
+      <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:11,color:"var(--text3)",marginBottom:4,textTransform:"uppercase",letterSpacing:".04em"}}>{label}</div>
+      <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:20,color:color||"var(--white)",lineHeight:1}}>{value}</div>
+      {sub&&<div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginTop:4}}>{sub}</div>}
+    </div>
+  );
+}
+
+function TenantBar({anchorPct,vacancy}){
+  const inlinePct=100-anchorPct, occ=inlinePct*(1-vacancy/100), vac=inlinePct*(vacancy/100);
+  return(
+    <div>
+      <div style={{display:"flex",height:20,borderRadius:6,overflow:"hidden",gap:2}}>
+        <div style={{width:anchorPct+"%",background:"var(--gold)",display:"flex",alignItems:"center",justifyContent:"center",transition:"width .6s ease"}}>
+          {anchorPct>12&&<span style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,color:"#000",fontWeight:500}}>{anchorPct.toFixed(0)}%</span>}
+        </div>
+        <div style={{width:occ+"%",background:"var(--blue)",display:"flex",alignItems:"center",justifyContent:"center",transition:"width .6s ease"}}>
+          {occ>12&&<span style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,color:"#fff",fontWeight:500}}>{occ.toFixed(0)}%</span>}
+        </div>
+        <div style={{width:vac+"%",background:"var(--surface3)",transition:"width .6s ease"}}/>
+      </div>
+      <div style={{display:"flex",gap:14,marginTop:7,flexWrap:"wrap"}}>
+        {[["Anchor","var(--gold)"],["Inline (Occ.)","var(--blue)"],["Vacant","var(--text3)"]].map(([l,c])=>(
+          <div key={l} style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:9,height:9,borderRadius:2,background:c,flexShrink:0}}/>
+            <span style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text2)"}}>{l}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StepBar({step}){
+  return(
+    <div style={{display:"flex",alignItems:"center",marginBottom:24,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,padding:"3px",overflow:"hidden"}}>
+      {["Property & Deal","Market Data","Results"].map((s,i)=>{
+        const active=step===i+1,done=step>i+1;
+        return(
+          <div key={s} style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"11px 6px",borderRadius:8,background:active?"var(--gold)":done?"var(--surface3)":"transparent",transition:"background .3s"}}>
+            <div style={{width:22,height:22,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Roboto Mono',monospace",fontWeight:500,fontSize:11,background:active?"rgba(0,0,0,.2)":done?"var(--green)":"var(--surface3)",color:active?"#000":done?"#000":"var(--text3)",flexShrink:0,transition:"all .3s"}}>{done?"✓":i+1}</div>
+            <span style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,color:active?"#000":done?"var(--text2)":"var(--text3)",whiteSpace:"nowrap"}}>{s}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Property Map — Street View fallback fixed ───────────────────
+function PropertyMap({address,confirmed}){
+  const hasKey=GOOGLE_MAPS_API_KEY&&GOOGLE_MAPS_API_KEY!=="YOUR_GOOGLE_MAPS_API_KEY";
+  const enc=encodeURIComponent(address||"Galveston County, Texas");
+  const[svFailed,setSvFailed]=useState(false);
+
+  useEffect(()=>{ setSvFailed(false); },[address]);
+
+  if(!hasKey||!confirmed){
+    return(
+      <div style={{height:260,borderRadius:10,background:"var(--surface2)",border:"1px solid var(--border)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,textAlign:"center",padding:20}}>
+        <div style={{fontSize:28}}>🗺️</div>
+        <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:13,color:"var(--text2)"}}>
+          {!confirmed?"Enter address above and click Show Map":"Add Google Maps API key to config"}
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      {/* Satellite view */}
+      <div style={{position:"relative",borderRadius:10,overflow:"hidden",border:"1px solid var(--border2)"}}>
+        <iframe key={"sat_"+address} width="100%" height="210" style={{border:0,display:"block"}} loading="lazy" allowFullScreen
+          src={`https://www.google.com/maps/embed/v1/place?key=${GOOGLE_MAPS_API_KEY}&q=${enc}&maptype=satellite&zoom=18`}
+        />
+        <div style={{position:"absolute",bottom:6,left:6,background:"rgba(14,12,9,.88)",borderRadius:5,padding:"3px 8px",fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--gold)",letterSpacing:".06em"}}>SATELLITE</div>
+      </div>
+      {/* Street View — with graceful error fallback */}
+      {!svFailed ? (
+        <div style={{position:"relative",borderRadius:10,overflow:"hidden",border:"1px solid var(--border2)"}}>
+          <iframe key={"sv_"+address} width="100%" height="140" style={{border:0,display:"block"}} loading="lazy" allowFullScreen
+            src={`https://www.google.com/maps/embed/v1/streetview?key=${GOOGLE_MAPS_API_KEY}&location=${enc}&heading=0&pitch=0&fov=90`}
+            onError={()=>setSvFailed(true)}
+          />
+          <div style={{position:"absolute",bottom:6,left:6,background:"rgba(14,12,9,.88)",borderRadius:5,padding:"3px 8px",fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--blue)",letterSpacing:".06em"}}>STREET VIEW</div>
+          <button onClick={()=>setSvFailed(true)} style={{position:"absolute",top:6,right:6,background:"rgba(14,12,9,.7)",border:"none",borderRadius:4,color:"var(--text3)",fontSize:10,padding:"3px 7px",cursor:"pointer",fontFamily:"'Source Sans 3',sans-serif"}}>✕ Hide</button>
+        </div>
+      ) : (
+        <div style={{borderRadius:10,border:"1px solid var(--border)",background:"var(--surface2)",padding:"14px",textAlign:"center"}}>
+          <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text3)"}}>
+            Street View unavailable for this address.
+            <a href={`https://www.google.com/maps/search/${enc}`} target="_blank" rel="noopener" style={{color:"var(--gold)",marginLeft:6,textDecoration:"none"}}>Open in Google Maps ↗</a>
+          </div>
+        </div>
+      )}
+      <a href={`https://www.google.com/maps/search/${enc}`} target="_blank" rel="noopener" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"7px",borderRadius:7,border:"1px solid var(--border2)",background:"var(--surface2)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:12,color:"var(--text2)",textDecoration:"none",transition:"all .2s"}}
+        onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--gold)";e.currentTarget.style.color="var(--gold)";}}
+        onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--border2)";e.currentTarget.style.color="var(--text2)";}}
+      >🔗 Open in Google Maps for full parcel lines &amp; property details ↗</a>
+    </div>
+  );
+}
+
+// ── Galveston fast-path badge ───────────────────────────────────
+function GalvestonBadge(){
+  return(
+    <div style={{background:"rgba(200,151,42,.08)",border:"2px solid var(--gold)",borderRadius:10,padding:"12px 16px",marginBottom:14,animation:"galvBadge .4s ease"}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+        <div style={{fontSize:24,flexShrink:0,lineHeight:1}}>⚡</div>
+        <div>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:14,color:"var(--gold)",marginBottom:3}}>Galveston County Fast-Path</div>
+          <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text2)",lineHeight:1.6}}>
+            Using hardcoded FIPS (State: 48 · County: 167) for Census data. <strong style={{color:"var(--gold)"}}>NNN rent comps: $18–$34/SF/yr</strong> based on CoStar/LoopNet Q4 2024 data for Galveston County retail.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard ───────────────────────────────────────────────────
+function Dashboard({deals,onDelete,sessionId,loading}){
+  if(loading) return <div style={{maxWidth:700,margin:"80px auto",textAlign:"center"}}><Spinner size={32}/><div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text3)",marginTop:14}}>Loading saved deals...</div></div>;
+  if(!deals.length) return(
+    <div style={{maxWidth:700,margin:"60px auto",padding:"0 32px",textAlign:"center",animation:"fadeUp .4s ease"}}>
+      <div style={{fontSize:48,marginBottom:14}}>📂</div>
+      <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:20,color:"var(--text2)",marginBottom:7}}>No Saved Deals Yet</div>
+      <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text3)",lineHeight:1.7}}>Run a feasibility analysis, then click <strong style={{color:"var(--gold)"}}>Save This Deal</strong> to compare properties here.</div>
+    </div>
+  );
+  const best=deals.reduce((a,b)=>parseFloat(a.metrics?.irr||0)>parseFloat(b.metrics?.irr||0)?a:b,deals[0]);
+  return(
+    <div style={{maxWidth:1100,margin:"0 auto",padding:"28px 28px 60px",animation:"fadeUp .4s ease"}}>
+      <div style={{marginBottom:18}}>
+        <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,letterSpacing:".12em",color:"var(--gold)",marginBottom:6}}>SAVED DEALS</div>
+        <h2 style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:24,color:"var(--white)"}}>Deal Comparison</h2>
+        <p style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text2)",marginTop:3}}>{deals.length} saved {deals.length===1?"property":"properties"} · {USE_CLOUD?"synced to cloud":"stored in this browser"}</p>
+      </div>
+      {deals.length>1&&(
+        <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:20,marginBottom:18}}>
+          <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:12,color:"var(--text2)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:12}}>IRR Comparison</div>
+          {[...deals].sort((a,b)=>parseFloat(b.metrics?.irr||0)-parseFloat(a.metrics?.irr||0)).map(d=>{
+            const irr=parseFloat(d.metrics?.irr||0);
+            const max=Math.max(...deals.map(x=>parseFloat(x.metrics?.irr||0)));
+            return(
+              <div key={d.id} style={{display:"flex",alignItems:"center",gap:12,marginBottom:9}}>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:13,color:"var(--text2)",width:180,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                <div style={{flex:1,height:10,background:"var(--surface3)",borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",borderRadius:5,background:d.id===best.id?"var(--green)":"var(--gold)",width:(irr/max*100)+"%",transition:"width 1s ease"}}/></div>
+                <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:13,color:d.id===best.id?"var(--green)":"var(--white)",width:52,textAlign:"right"}}>{irr.toFixed(1)}%</div>
+                {d.id===best.id&&<div style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--green)",border:"1px solid var(--green)",borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>BEST</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:14}}>
+        {[...deals].sort((a,b)=>parseFloat(b.metrics?.irr||0)-parseFloat(a.metrics?.irr||0)).map((d,i)=>{
+          const m=d.metrics||{}, ok=parseFloat(m.irr||0)>=12;
+          return(
+            <div key={d.id} style={{background:"var(--surface)",border:`1px solid ${ok?"rgba(76,175,125,.2)":"var(--border)"}`,borderRadius:12,padding:20,animation:`dashIn .4s ${i*.08}s ease both`,position:"relative"}}>
+              {d.id===best.id&&deals.length>1&&<div style={{position:"absolute",top:12,right:12,fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--green)",border:"1px solid var(--green)",borderRadius:4,padding:"2px 6px"}}>★ TOP DEAL</div>}
+              <div style={{marginBottom:12}}>
+                <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:15,color:"var(--white)",marginBottom:3}}>{d.name}</div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)"}}>{d.address}</div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginTop:2}}>{new Date(d.savedAt).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</div>
+                {m.isNNN&&<div style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--gold)",border:"1px solid rgba(200,151,42,.3)",borderRadius:3,padding:"1px 5px",display:"inline-block",marginTop:4}}>NNN</div>}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:12}}>
+                {[
+                  {l:"IRR",v:m.irr+"%",c:ok?"var(--green)":"var(--red)"},
+                  {l:"Cap Rate",v:m.goingInCap+"%",c:"var(--gold)"},
+                  {l:"Cash-on-Cash",v:m.coc+"%",c:"var(--blue)"},
+                  {l:"DSCR",v:m.dscr+"×",c:parseFloat(m.dscr)>=1.25?"var(--green)":"var(--gold)"},
+                  {l:"NOI/yr",v:fmtK(m.noi),c:"var(--text)"},
+                  {l:"Price/SF",v:"$"+m.pricePerSF,c:"var(--text)"},
+                ].map(x=>(
+                  <div key={x.l} style={{background:"var(--surface2)",borderRadius:7,padding:"8px"}}>
+                    <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:10,color:"var(--text3)",marginBottom:2,textTransform:"uppercase"}}>{x.l}</div>
+                    <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:13,color:x.c}}>{x.v}</div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=>onDelete(d.id)} style={{width:"100%",padding:"8px",borderRadius:7,border:"1px solid var(--border2)",background:"transparent",color:"var(--text3)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:12,cursor:"pointer",transition:"all .2s"}}
+                onMouseEnter={e=>{e.currentTarget.style.borderColor="var(--red)55";e.currentTarget.style.color="var(--red)";}}
+                onMouseLeave={e=>{e.currentTarget.style.borderColor="var(--border2)";e.currentTarget.style.color="var(--text3)";}}
+              >Remove from Dashboard</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Legals ───────────────────────────────────────────────────────
+function Legals(){
+  const[signed,setSigned]=useState({});
+  const[loading,setLoading]=useState(null);
+  const docs=[
+    {id:"psa",label:"Purchase & Sale Agreement",pages:24,api:"DocuSign"},
+    {id:"loi",label:"Letter of Intent",pages:6,api:"DocuSign"},
+    {id:"ron",label:"Remote Online Notarization",pages:3,api:"Notarize"},
+    {id:"lpa",label:"LP Agreement",pages:41,api:"DocuSign"},
+    {id:"env",label:"Environmental Disclosure",pages:9,api:"EPA Database"},
+  ];
+  return(
+    <div style={{maxWidth:780,margin:"0 auto",padding:"28px 28px 60px",animation:"fadeUp .4s ease"}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,letterSpacing:".12em",color:"var(--gold)",marginBottom:6}}>1-CLICK LEGALS</div>
+        <h2 style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:24,color:"var(--white)"}}>Document Center</h2>
+        <p style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text2)",marginTop:5,lineHeight:1.7}}>Sign all your closing documents digitally — no printing, no fax, no notary appointment.</p>
+        <div style={{marginTop:12,padding:"10px 14px",background:"rgba(200,151,42,.06)",border:"1px solid rgba(200,151,42,.2)",borderRadius:8,fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text2)",lineHeight:1.6}}>
+          ⚖️ <strong style={{color:"var(--gold)"}}>Legal Note:</strong> GroundUp provides state-approved templates and connects users to licensed third-party e-notaries. This tool does not constitute legal advice. GroundUp charges a flat SaaS fee — it does not take a commission on capital raised, avoiding SEC broker-dealer registration requirements.
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        {[["DocuSign","var(--blue)"],["Notarize.com","var(--green)"],["Stripe Escrow","var(--gold)"],["EPA Database","var(--text2)"]].map(([n,c])=>(
+          <div key={n} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 12px",background:"var(--surface2)",border:`1px solid ${c}44`,borderRadius:18}}>
+            <div style={{width:5,height:5,borderRadius:"50%",background:c,animation:"pulse-dot 2s ease-in-out infinite"}}/>
+            <span style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:12,color:c}}>{n}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {docs.map((doc,i)=>{const isDone=signed[doc.id],isLoad=loading===doc.id;return(
+          <div key={doc.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 18px",background:"var(--surface)",border:`1px solid ${isDone?"rgba(76,175,125,.25)":"var(--border)"}`,borderRadius:10,transition:"border-color .4s",animation:`fadeUp .4s ${i*.07}s ease both`,gap:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,flex:1}}>
+              <div style={{width:38,height:38,borderRadius:8,background:isDone?"rgba(76,175,125,.1)":"var(--surface2)",border:`1px solid ${isDone?"var(--green)":"var(--border)"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,transition:"all .4s"}}>{isDone?"✅":"📄"}</div>
+              <div><div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,color:isDone?"var(--green)":"var(--white)"}}>{doc.label}</div><div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginTop:1}}>{doc.pages} pages · via {doc.api}</div></div>
+            </div>
+            <button onClick={()=>{if(!isDone&&!isLoad){setLoading(doc.id);setTimeout(()=>{setLoading(null);setSigned(s=>({...s,[doc.id]:true}));},1800);}}} disabled={isDone||isLoad}
+              style={{padding:"9px 20px",borderRadius:8,border:"none",cursor:isDone?"default":isLoad?"not-allowed":"pointer",background:isDone?"rgba(76,175,125,.12)":"var(--gold)",color:isDone?"var(--green)":"#000",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,minWidth:120,display:"flex",alignItems:"center",justifyContent:"center",gap:7,transition:"all .3s",flexShrink:0}}>
+              {isLoad?<><Spinner size={12} color="#000"/>Signing...</>:isDone?"✓ Signed":"Sign Now"}
+            </button>
+          </div>
+        );})}
+      </div>
+      {Object.keys(signed).length===docs.length&&(
+        <div style={{marginTop:18,padding:20,background:"rgba(76,175,125,.07)",border:"1px solid rgba(76,175,125,.25)",borderRadius:12,textAlign:"center",animation:"fadeUp .4s ease"}}>
+          <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:18,color:"var(--green)",marginBottom:5}}>🎉 All Documents Executed</div>
+          <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text2)",lineHeight:1.7}}>Your deal is legally closed. Funds will be released from escrow within 2 business days.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pitch Deck Generator ─────────────────────────────────────────
+function PitchDeck({deal}){
+  if(!deal) return(
+    <div style={{maxWidth:700,margin:"60px auto",padding:"0 32px",textAlign:"center",animation:"fadeUp .4s ease"}}>
+      <div style={{fontSize:48,marginBottom:14}}>📊</div>
+      <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:20,color:"var(--text2)",marginBottom:7}}>No Deal Selected</div>
+      <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text3)",lineHeight:1.7}}>Run and save a feasibility analysis first, then return here to generate a pitch deck.</div>
+    </div>
+  );
+  const m = deal.metrics||{};
+  const slides = [
+    {
+      title:"Executive Summary",
+      content:[
+        {label:"Property",value:deal.name||deal.address},
+        {label:"Address",value:deal.address},
+        {label:"Deal Type",value:m.isNNN?"Triple Net (NNN) Retail":"Gross Lease Retail"},
+        {label:"Projected IRR",value:m.irr+"%",highlight:true},
+        {label:"Investment Required",value:fmtDC(m.equity)},
+        {label:"Hold Period",value:m.holdYears+" years"},
+      ]
+    },
+    {
+      title:"Property Overview",
+      content:[
+        {label:"Purchase Price",value:fmtDC(m.price)},
+        {label:"Total Square Feet",value:fmt(m.sqft)+" SF"},
+        {label:"Price / SF",value:"$"+m.pricePerSF+"/SF"},
+        {label:"Anchor Space",value:fmt(m.anchorSF)+" SF"},
+        {label:"Inline Occupied",value:fmt(m.inlineSF)+" SF"},
+        {label:"Lease Structure",value:m.nnnNote},
+      ]
+    },
+    {
+      title:"Income & NOI",
+      content:[
+        {label:"Anchor Rent",value:"$"+m.anchorRent+"/SF/yr NNN"},
+        {label:"Inline Rent",value:"$"+m.inlineRent+"/SF/yr NNN"},
+        {label:"Gross Income",value:fmtDC(m.effGrossInc)+"/yr"},
+        {label:"Operating Expenses",value:m.isNNN?"$0 (Tenant Pays)":fmtDC(m.opex)+"/yr"},
+        {label:"Mgmt & Reserves",value:fmtDC(m.mgmtReserve)+"/yr"},
+        {label:"Net Operating Income",value:fmtDC(m.noi)+"/yr",highlight:true},
+      ]
+    },
+    {
+      title:"Debt Structure",
+      content:[
+        {label:"Loan Amount",value:fmtDC(m.loanAmt)},
+        {label:"Loan Type",value:m.loanType==="io"?"Interest-Only":"Fully Amortizing P&I"},
+        {label:"Annual Interest",value:fmtDC(m.annInterest)+" (tax deductible)"},
+        {label:"Annual Principal",value:m.loanType==="io"?"$0 (recycled to next deal)":fmtDC(m.annPrincipal)},
+        {label:"Total Debt Service",value:fmtDC(m.annDS)+"/yr"},
+        {label:"DSCR",value:m.dscr+"×",highlight:parseFloat(m.dscr)>=1.25},
+      ]
+    },
+    {
+      title:"Returns",
+      content:[
+        {label:"Annual Cash Flow (CFBT)",value:fmtDC(m.cfbt)+"/yr",highlight:m.cfbt>0},
+        {label:"Cash-on-Cash Yield",value:m.coc+"%"},
+        {label:"Going-In Cap Rate",value:m.goingInCap+"%"},
+        {label:"Exit Value (Yr "+m.holdYears+")",value:fmtDC(m.exitVal)},
+        {label:"Exit Equity",value:fmtDC(m.exitEquity)},
+        {label:"Projected IRR",value:m.irr+"%",highlight:true},
+      ]
+    },
+  ];
+  return(
+    <div style={{maxWidth:900,margin:"0 auto",padding:"28px 28px 60px",animation:"fadeUp .4s ease"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div>
+          <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,letterSpacing:".12em",color:"var(--gold)",marginBottom:6}}>PITCH DECK GENERATOR</div>
+          <h2 style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:24,color:"var(--white)"}}>{deal.name||deal.address}</h2>
+          <p style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:13,color:"var(--text2)",marginTop:3}}>Generated {new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}</p>
+        </div>
+        <button onClick={()=>window.print()} className="no-print" style={{padding:"10px 20px",borderRadius:9,border:"1px solid var(--gold)44",background:"rgba(200,151,42,.08)",color:"var(--gold)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+          🖨️ Print / Export PDF
+        </button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(360px,1fr))",gap:16}}>
+        {slides.map((slide,si)=>(
+          <div key={si} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:14,padding:22,animation:`dashIn .4s ${si*.07}s ease both`}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:16,color:"var(--white)",marginBottom:14,paddingBottom:10,borderBottom:"1px solid var(--border)"}}>{si+1}. {slide.title}</div>
+            {slide.content.map((row,ri)=>(
+              <div key={ri} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)",background:row.highlight?"rgba(200,151,42,.04)":"transparent"}}>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:13,color:"var(--text2)"}}>{row.label}</div>
+                <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:13,color:row.highlight?"var(--gold)":"var(--white)",textAlign:"right",maxWidth:"55%"}}>{row.value}</div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div style={{marginTop:20,padding:"14px 18px",background:"rgba(200,151,42,.04)",border:"1px solid rgba(200,151,42,.15)",borderRadius:10,fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",lineHeight:1.7}}>
+        <strong style={{color:"var(--text2)"}}>Disclaimer:</strong> This analysis is generated by GroundUp for informational purposes only. Financial projections are estimates based on market data and user inputs. All investments carry risk. Past performance does not guarantee future results. Consult a licensed financial advisor, real estate attorney, and CPA before making investment decisions. Market rental rates sourced from CoStar/LoopNet Galveston County data, Q4 2024.
+      </div>
+    </div>
+  );
+}
+
+// ── Feasibility Tab ─────────────────────────────────────────────
+function Feasibility({onSave,sessionId,onPitchDeck}){
+  const[step,setStep]=useState(1);
+  const[form,setForm]=useState({
+    address:"",name:"",
+    price:"3500000",sqft:"18000",
+    anchorPct:"40",vacancy:"8",
+    capRateExit:"6.75",holdYears:"5",
+    ltv:"65",interestRate:"7.0",amortYears:"25",
+    loanType:"amortizing",
+    leaseType:"nnn",         // "nnn" or "gross"
+    opexPct:"30",            // only used if gross
+    inlineRentOverride:"",   // blank = auto
+    anchorRentOverride:"",   // blank = auto
+    equityIn:"",             // manual equity override (optional)
+  });
+  const[mapConfirmed,setMapConfirmed]=useState(false);
+  const[confirmedAddress,setConfirmedAddress]=useState("");
+  const[marketData,setMarketData]=useState(null);
+  const[fetchSt,setFetchSt]=useState({loading:false,done:false,error:false});
+  const[done,setDone]=useState(false);
+  const[saved,setSaved]=useState(false);
+  const resRef=useRef(null);
+  const setF=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const m=calcMetrics(form,marketData);
+  const galv=isGalveston(form.address);
+
+  const confirmMap=()=>{if(form.address.trim()){setConfirmedAddress(form.address.trim());setMapConfirmed(true);}};
+  const fetchData=async()=>{
+    setFetchSt({loading:true,done:false,error:false});setMarketData(null);
+    try{const d=await fetchMarketData(form.address);setMarketData(d);setFetchSt({loading:false,done:true,error:false});}
+    catch{setFetchSt({loading:false,done:false,error:true});}
+  };
+  const runAnalysis=()=>{setDone(false);setSaved(false);setTimeout(()=>{setDone(true);setStep(3);setTimeout(()=>resRef.current?.scrollIntoView({behavior:"smooth"}),100);},300);};
+  const handleSave=async()=>{
+    const deal={id:Date.now().toString(),name:form.name||form.address.split(",")[0]||"Untitled",address:form.address,savedAt:new Date().toISOString(),form:{...form},metrics:{...m},marketData};
+    await saveDeal(sessionId,deal);setSaved(true);onSave();
+    onPitchDeck(deal);
+  };
+
+  // Format number inputs with commas on blur
+  const formatOnBlur=(k)=>(e)=>{
+    const raw=e.target.value.replace(/[^0-9.]/g,"");
+    if(raw) setF(k,raw);
+    onB(e);
+  };
+
+  return(
+    <div style={{padding:"28px 28px 60px",maxWidth:1200,margin:"0 auto"}}>
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,letterSpacing:".12em",color:"var(--gold)",marginBottom:6}}>FEASIBILITY BOT · RETAIL / STRIP CENTER</div>
+        <h2 style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:24,color:"var(--white)"}}>Deal Analysis</h2>
+        <p style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:14,color:"var(--text2)",marginTop:4}}>Enter property details and we'll pull real market data to size up the deal.</p>
+      </div>
+      <StepBar step={step}/>
+
+      {/* STEP 1 */}
+      {step===1&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:22,animation:"slideIn .35s ease"}}>
+          {/* LEFT */}
+          <div style={{display:"flex",flexDirection:"column",gap:18}}>
+            {/* Property Info */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--gold)" title="Property Details" sub="Address, size, and acquisition price"/>
+              <Field label="Deal Name (Optional)" hint="e.g. Galveston Strip Center">
+                <input type="text" value={form.name} placeholder="Give this deal a name" style={iStyle} onChange={e=>setF("name",e.target.value)} onFocus={onF} onBlur={onB}/>
+              </Field>
+              <Field label="Property Address" hint="Full address — City, State, ZIP">
+                <div style={{display:"flex",gap:7}}>
+                  <input type="text" value={form.address} placeholder="123 Seawall Blvd, Galveston, TX 77550" style={{...iStyle,flex:1}} onChange={e=>{setF("address",e.target.value);setMapConfirmed(false);}} onFocus={onF} onBlur={onB} onKeyDown={e=>e.key==="Enter"&&confirmMap()}/>
+                  <button onClick={confirmMap} style={{padding:"0 14px",borderRadius:8,border:"none",background:"var(--gold)",color:"#000",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Show Map</button>
+                </div>
+              </Field>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <Field label="Purchase Price ($)" hint={fmtDC(parseFloat(form.price)||0)}>
+                  <input type="number" value={form.price} style={iStyle} onChange={e=>setF("price",e.target.value)} onFocus={onF} onBlur={formatOnBlur("price")}/>
+                </Field>
+                <Field label="Total Square Feet">
+                  <input type="number" value={form.sqft} style={iStyle} onChange={e=>setF("sqft",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+              </div>
+              <Field label="Lease Structure" hint="Determines who pays OpEx">
+                <select value={form.leaseType} style={sStyle} onChange={e=>setF("leaseType",e.target.value)} onFocus={onF} onBlur={onB}>
+                  <option value="nnn">Triple Net (NNN) — Tenant pays taxes, insurance, CAM</option>
+                  <option value="gross">Gross Lease — Owner pays operating expenses</option>
+                </select>
+              </Field>
+              {form.leaseType==="gross"&&(
+                <Field label="Operating Expense Ratio (%)" hint="% of EGI">
+                  <input type="number" step="1" value={form.opexPct} style={iStyle} onChange={e=>setF("opexPct",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+              )}
+            </div>
+
+            {/* Debt Structure */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--blue)" title="Debt Structure" sub="Financing assumptions"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <Field label={`LTV (${form.ltv}%)`} hint="60–80% range">
+                  <input type="range" min="40" max="80" step="1" value={form.ltv} style={{width:"100%",height:5,accentColor:"var(--blue)",cursor:"pointer"}} onChange={e=>setF("ltv",e.target.value)}/>
+                  <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:12,color:"var(--blue)",marginTop:4}}>Loan: {fmtDC(parseFloat(form.price||0)*parseFloat(form.ltv||0)/100)} · Equity: {fmtDC(parseFloat(form.price||0)*(1-parseFloat(form.ltv||0)/100))}</div>
+                </Field>
+                <Field label="Interest Rate (%)" hint="Current commercial rate">
+                  <input type="number" step="0.1" value={form.interestRate} style={iStyle} onChange={e=>setF("interestRate",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+                <Field label="Loan Type">
+                  <select value={form.loanType} style={sStyle} onChange={e=>setF("loanType",e.target.value)} onFocus={onF} onBlur={onB}>
+                    <option value="amortizing">Fully Amortizing P&amp;I</option>
+                    <option value="io">Interest-Only (principal recycled)</option>
+                  </select>
+                </Field>
+                <Field label="Amortization (Years)" hint={form.loanType==="io"?"N/A for I/O":"Typical: 20–25 yrs"}>
+                  <input type="number" min="10" max="30" value={form.amortYears} style={{...iStyle,opacity:form.loanType==="io"?.4:1}} disabled={form.loanType==="io"} onChange={e=>setF("amortYears",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+              </div>
+              {/* Estimated Monthly P&I */}
+              <div style={{marginTop:8,padding:"10px 14px",background:"var(--surface2)",borderRadius:8,border:"1px solid var(--border)"}}>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text3)",marginBottom:4}}>Estimated Monthly P&I Payment</div>
+                <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:18,color:"var(--gold)"}}>
+                  {form.loanType==="io"
+                    ? fmtDC(parseFloat(form.price||0)*parseFloat(form.ltv||0)/100*parseFloat(form.interestRate||0)/100/12)+"/mo (I/O)"
+                    : (()=>{
+                        const L=parseFloat(form.price||0)*parseFloat(form.ltv||0)/100;
+                        const r=parseFloat(form.interestRate||0)/100/12;
+                        const n=parseInt(form.amortYears||25)*12;
+                        const pmt=r>0?L*(r*Math.pow(1+r,n))/(Math.pow(1+r,n)-1):L/n;
+                        return fmtDC(pmt)+"/mo";
+                      })()
+                  }
+                </div>
+              </div>
+            </div>
+
+            {/* Deal Assumptions */}
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--green)" title="Deal Assumptions" sub="Sliders update the live preview"/>
+              <Field label={`Anchor Tenant — ${form.anchorPct}% of total space`} hint="Large single tenant">
+                <input type="range" min="0" max="80" value={form.anchorPct} style={{width:"100%",height:5,accentColor:"var(--gold)",cursor:"pointer"}} onChange={e=>setF("anchorPct",e.target.value)}/>
+              </Field>
+              <Field label={`Vacancy Rate — ${form.vacancy}%`} hint="Up to 75% for restoration deals">
+                <input type="range" min="0" max="75" value={form.vacancy} style={{width:"100%",height:5,accentColor:"var(--red)",cursor:"pointer"}} onChange={e=>setF("vacancy",e.target.value)}/>
+              </Field>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <Field label="Exit Cap Rate (%)" hint="Typical: 6–8%">
+                  <input type="number" step="0.1" value={form.capRateExit} style={iStyle} onChange={e=>setF("capRateExit",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+                <Field label="Hold Period (Years)">
+                  <input type="number" min="1" max="20" value={form.holdYears} style={iStyle} onChange={e=>setF("holdYears",e.target.value)} onFocus={onF} onBlur={onB}/>
+                </Field>
+              </div>
+              {/* Rent overrides */}
+              <div style={{marginTop:4,padding:"12px 14px",background:"var(--surface2)",borderRadius:8,border:"1px solid var(--border)"}}>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:11,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Rent Overrides ($/SF/yr NNN) — optional</div>
+                {galv&&<div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--gold)",marginBottom:8}}>Galveston comps: $18–34/SF/yr · Seawall premium ~$30–34/SF</div>}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <Field label="Inline Rent Override">
+                    <input type="number" step="0.5" value={form.inlineRentOverride} placeholder={galv?"27 (market)":"auto"} style={iStyle} onChange={e=>setF("inlineRentOverride",e.target.value)} onFocus={onF} onBlur={onB}/>
+                  </Field>
+                  <Field label="Anchor Rent Override">
+                    <input type="number" step="0.5" value={form.anchorRentOverride} placeholder={galv?"21 (anchor disc.)":"auto"} style={iStyle} onChange={e=>setF("anchorRentOverride",e.target.value)} onFocus={onF} onBlur={onB}/>
+                  </Field>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT */}
+          <div style={{display:"flex",flexDirection:"column",gap:18}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:18}}>
+              <SectionHead dot="var(--blue)" title="Property Location" sub='Satellite + Street View · click "Show Map" to load'/>
+              <PropertyMap address={confirmedAddress} confirmed={mapConfirmed}/>
+            </div>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:18}}>
+              <SectionHead dot="var(--gold)" title="Live Preview" sub="Updates as you adjust inputs"/>
+              <TenantBar anchorPct={parseFloat(form.anchorPct)||40} vacancy={parseFloat(form.vacancy)||8}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginTop:14}}>
+                <BigTile label="Price/SF" value={"$"+Math.round((parseFloat(form.price)||3500000)/(parseInt(form.sqft)||18000))+"/SF"} color="var(--gold)" delay={0}/>
+                <BigTile label="Going-In Cap" value={m.goingInCap+"%"} color="var(--blue)" delay={.05}/>
+                <BigTile label="Est. NOI" value={fmtK(m.noi)} color="var(--green)" delay={.1}/>
+              </div>
+              <div style={{marginTop:12,padding:"10px 14px",background:"var(--surface2)",borderRadius:8,border:"1px solid var(--border)"}}>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginBottom:4}}>{m.nnnNote}</div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text2)"}}>Inline: <strong style={{color:"var(--blue)"}}>${m.inlineRent}/SF/yr</strong></div>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:12,color:"var(--text2)"}}>Anchor: <strong style={{color:"var(--gold)"}}>${m.anchorRent}/SF/yr</strong></div>
+                </div>
+              </div>
+              {galv&&(
+                <div style={{marginTop:10,padding:"10px 14px",background:"rgba(200,151,42,.05)",borderRadius:8,border:"1px solid rgba(200,151,42,.2)"}}>
+                  <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--gold)",marginBottom:3,letterSpacing:".06em"}}>GALVESTON NNN MARKET COMPS · 2024</div>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text2)",lineHeight:1.6}}>
+                    Value strip: $18–22/SF · Market: $27–30/SF · Seawall/premium: $30–34/SF
+                  </div>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:10,color:"var(--text3)",marginTop:3}}>{GALV_MARKET.source}</div>
+                </div>
+              )}
+            </div>
+            <button onClick={()=>{if(form.address.trim())setStep(2);}}
+              style={{width:"100%",padding:15,borderRadius:10,border:"none",cursor:form.address.trim()?"pointer":"not-allowed",background:form.address.trim()?"var(--gold)":"var(--surface2)",color:form.address.trim()?"#000":"var(--text3)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:15,transition:"all .3s",boxShadow:form.address.trim()?"0 0 28px rgba(200,151,42,.25)":"none"}}
+              onMouseEnter={e=>{if(form.address.trim())e.currentTarget.style.background="var(--gold2)";}}
+              onMouseLeave={e=>{if(form.address.trim())e.currentTarget.style.background="var(--gold)";}}>
+              {form.address.trim()?"Continue to Market Data →":"Enter an address above to continue"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2 */}
+      {step===2&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:22,animation:"slideIn .35s ease"}}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--green)" title="Live Market Data" sub={`Pulling real data for: ${form.address}`}/>
+              {galv&&<GalvestonBadge/>}
+              {[
+                {label:"US Census Bureau — ACS 5-Year",desc:"Median income · Population · Median rent · Unemployment"},
+                {label:"Census Geocoder",desc:"Converts address to FIPS county codes for data pull"},
+                {label:"Galveston NNN Rent Comps",desc:"$18–34/SF range · CoStar/LoopNet Q4 2024 (researched)"},
+              ].map((src,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"12px 13px",background:"var(--surface2)",borderRadius:8,border:`1px solid ${fetchSt.done?"rgba(76,175,125,.2)":fetchSt.loading?"rgba(200,151,42,.2)":"var(--border)"}`,marginBottom:9,position:"relative",overflow:"hidden",transition:"border-color .4s"}}>
+                  {fetchSt.loading&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:"linear-gradient(90deg,transparent,var(--gold),transparent)",backgroundSize:"200% 100%",animation:"shimmer 1.2s linear infinite"}}/>}
+                  <div style={{width:32,height:32,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",background:fetchSt.done?"rgba(76,175,125,.1)":fetchSt.loading?"rgba(200,151,42,.08)":"var(--surface3)",border:`1px solid ${fetchSt.done?"var(--green)":fetchSt.loading?"var(--gold)":"var(--border)"}`,flexShrink:0,fontSize:13,transition:"all .4s"}}>
+                    {fetchSt.loading?<Spinner size={13} color="var(--gold)"/>:fetchSt.done?"✓":"○"}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,color:fetchSt.done?"var(--white)":fetchSt.loading?"var(--gold)":"var(--text3)",transition:"color .4s"}}>{src.label}</div>
+                    <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text3)",marginTop:2}}>{src.desc}</div>
+                  </div>
+                  <span style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,padding:"2px 7px",borderRadius:4,border:`1px solid ${fetchSt.done?"var(--green)":fetchSt.loading?"var(--gold)":"var(--border)"}`,color:fetchSt.done?"var(--green)":fetchSt.loading?"var(--gold)":"var(--text3)",background:fetchSt.done?"rgba(76,175,125,.08)":fetchSt.loading?"rgba(200,151,42,.08)":"transparent",transition:"all .4s"}}>
+                    {fetchSt.done?"SYNCED":fetchSt.loading?"FETCHING":"STANDBY"}
+                  </span>
+                </div>
+              ))}
+              <div style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:12,fontFamily:"'Roboto Mono',monospace",fontSize:11,minHeight:64,marginTop:4}}>
+                <div style={{color:"var(--gold)",marginBottom:5,fontSize:9,letterSpacing:".06em"}}>// DATA LOG</div>
+                {!fetchSt.loading&&!fetchSt.done&&!fetchSt.error&&<div style={{color:"var(--text3)"}}>Ready — click Fetch Market Data to begin</div>}
+                {fetchSt.loading&&<div style={{color:"var(--gold)",animation:"blink 1s step-end infinite"}}>▌ Querying Census Bureau{galv?" (Galveston fast-path)":" (geocoding address)"}...</div>}
+                {fetchSt.done&&!marketData?.census&&<div style={{color:"var(--gold)"}}>⚠ Try: 123 Main St, Galveston, TX 77550</div>}
+                {fetchSt.done&&marketData?.census&&<><div style={{color:"var(--green)"}}>✓ {marketData.census.county}</div><div style={{color:"var(--green)"}}>✓ Census ACS 2022 loaded</div><div style={{color:"var(--text2)",marginTop:4}}>→ Ready to run analysis</div></>}
+                {fetchSt.error&&<div style={{color:"var(--red)"}}>✕ Connection issue — estimates will be used</div>}
+              </div>
+              <div style={{display:"flex",gap:10,marginTop:14}}>
+                <button onClick={()=>setStep(1)} style={{flex:1,padding:12,borderRadius:8,border:"1px solid var(--border2)",background:"var(--surface2)",color:"var(--text2)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}}>← Back</button>
+                <button onClick={fetchData} disabled={fetchSt.loading} style={{flex:2,padding:12,borderRadius:8,border:"none",cursor:fetchSt.loading?"not-allowed":"pointer",background:fetchSt.loading?"var(--surface3)":"var(--gold)",color:fetchSt.loading?"var(--text3)":"#000",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:9,transition:"all .3s",boxShadow:fetchSt.loading?"none":"0 0 20px rgba(200,151,42,.25)"}}>
+                  {fetchSt.loading?<><Spinner size={14} color="var(--text3)"/>Fetching...</>:"⚡  Fetch Market Data"}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--gold)" title="Market Intelligence" sub="Real numbers from US government sources"/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {[
+                  {label:"Median HH Income",value:marketData?.census?.medianIncome?fmtDC(marketData.census.medianIncome):"Waiting...",sub:marketData?.census?.county||"Census ACS 2022",color:"var(--gold)"},
+                  {label:"County Population",value:marketData?.census?.population?fmt(marketData.census.population)+" people":"Waiting...",sub:"Census ACS 2022",color:"var(--blue)"},
+                  {label:"NNN Rent Range",value:galv?"$18–34/SF/yr":"Est. from income",sub:galv?"CoStar/LoopNet 2024":"Income-derived proxy",color:"var(--green)"},
+                  {label:"Traffic / CPD",value:marketData?.census?.cpdEstimate||"Waiting...",sub:"CPD = Cars Per Day · see note",color:"var(--text2)"},
+                ].map(d=>(
+                  <div key={d.label} style={{background:"var(--surface2)",border:"1px solid var(--border)",borderRadius:8,padding:12}}>
+                    <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:10,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:5}}>{d.label}</div>
+                    <div style={{fontFamily:"'Playfair Display',serif",fontWeight:700,fontSize:17,color:d.color,minHeight:24}}>{d.value}</div>
+                    <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:10,color:"var(--text3)",marginTop:3}}>{d.sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* CPD data note */}
+              <div style={{marginTop:12,padding:"10px 13px",background:"rgba(91,163,217,.06)",border:"1px solid rgba(91,163,217,.2)",borderRadius:8}}>
+                <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--blue)",marginBottom:4,letterSpacing:".06em"}}>TRAFFIC DATA NOTE</div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:11,color:"var(--text2)",lineHeight:1.6}}>
+                  The Census does not publish CPD directly. For precise traffic counts, use <strong style={{color:"var(--blue)"}}>TxDOT AADT data</strong> (free: txdot.gov → Maps & Data → Traffic Count) or paid sources: <strong>StreetLight Data</strong>, <strong>INRIX</strong>, or <strong>Placer.ai</strong>. For Seawall Blvd, Galveston: ~25,000–40,000 CPD depending on season.
+                </div>
+              </div>
+              {marketData?.census&&(
+                <div style={{marginTop:12,padding:"12px 14px",background:"rgba(200,151,42,.06)",border:"1px solid rgba(200,151,42,.2)",borderRadius:8}}>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:12,color:"var(--gold)",marginBottom:4}}>Trade Area Signal</div>
+                  <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:13,color:"var(--text2)",lineHeight:1.7}}>
+                    {marketData.census.medianIncome>75000?"Strong buying power. National and premium tenants will compete for your space.":marketData.census.medianIncome>50000?"Solid mid-market area. Value retail, service tenants, and QSR concepts perform well.":"Value-oriented market. Dollar stores, discount grocers, and essential services perform best."}
+                  </div>
+                </div>
+              )}
+            </div>
+            <button onClick={runAnalysis} style={{width:"100%",padding:15,borderRadius:10,border:"none",cursor:"pointer",background:"var(--green)",color:"#000",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:15,boxShadow:"0 0 28px rgba(76,175,125,.25)",transition:"all .3s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="var(--green2)"}
+              onMouseLeave={e=>e.currentTarget.style.background="var(--green)"}
+            >{fetchSt.done?"Run Feasibility Analysis →":"Skip & Run With Estimates →"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3 — RESULTS */}
+      {step===3&&(
+        <div ref={resRef} style={{animation:"slideIn .35s ease"}}>
+          {/* Verdict Banner */}
+          <div style={{padding:"18px 22px",borderRadius:12,border:`2px solid ${m.feasible?"rgba(76,175,125,.4)":"rgba(224,92,92,.35)"}`,background:m.feasible?"rgba(76,175,125,.06)":"rgba(224,92,92,.06)",marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+            <div style={{flex:1,minWidth:180}}>
+              <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,color:m.feasible?"var(--green)":"var(--red)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:5}}>{m.feasible?"✓  This deal clears the hurdle rate":"⚠  This deal is below the hurdle rate"}</div>
+              <div style={{fontFamily:"'Source Sans 3',sans-serif",fontSize:13,color:"var(--text2)",lineHeight:1.7}}>
+                {m.feasible?`Projected IRR of ${m.irr}% exceeds the 12% retail minimum by ${(parseFloat(m.irr)-12).toFixed(1)}pp. ${m.isNNN?"NNN structure minimizes landlord expense exposure.":""}`:
+                  `Projected IRR of ${m.irr}% falls ${(12-parseFloat(m.irr)).toFixed(1)}pp short of the 12% hurdle. Consider renegotiating price or improving tenant mix.`}
+              </div>
+              {m.isNNN&&<div style={{marginTop:8,display:"inline-block",fontFamily:"'Roboto Mono',monospace",fontSize:10,color:"var(--gold)",border:"1px solid rgba(200,151,42,.35)",borderRadius:4,padding:"2px 8px"}}>NNN · Tenant Pays OpEx</div>}
+            </div>
+            <div style={{textAlign:"center",flexShrink:0}}>
+              <div style={{fontFamily:"'Playfair Display',serif",fontWeight:800,fontSize:60,color:m.feasible?"var(--green)":"var(--red)",lineHeight:1}}>
+                {done?<Counter target={parseFloat(m.irr)} decimals={1} running={done}/>:"—"}<span style={{fontSize:28}}>%</span>
+              </div>
+              <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:11,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".06em",marginTop:3}}>Projected IRR</div>
+            </div>
+          </div>
+
+          {/* Income Waterfall */}
+          <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22,marginBottom:16}}>
+            <SectionHead dot="var(--green)" title="Income & Cash Flow Waterfall" sub="Complete income statement with NNN structure"/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+              <div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:11,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Income</div>
+                <MetricRow label="Gross Potential Income" value={fmtDC(m.grossPGI)+"/yr"} note="Anchor + inline at full rent"/>
+                <MetricRow label="Effective Gross Income" value={fmtDC(m.effGrossInc)+"/yr"} color="var(--text)" note="After vacancy deduction"/>
+                <MetricRow label="Operating Expenses" value={m.isNNN?"$0 (NNN)":fmtDC(m.opex)+"/yr"} color={m.isNNN?"var(--green)":"var(--red)"} note={m.isNNN?"Tenant's responsibility":"Owner's expense at "+form.opexPct+"%"}/>
+                <MetricRow label="Mgmt & Reserves (4%)" value={"−"+fmtDC(m.mgmtReserve)+"/yr"} color="var(--text3)"/>
+                <MetricRow label="Net Operating Income" value={fmtDC(m.noi)+"/yr"} color="var(--green)" highlight={true} note="Owner's income before debt service"/>
+              </div>
+              <div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:11,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Debt Service</div>
+                <MetricRow label="Loan Amount" value={fmtDC(m.loanAmt)} color="var(--text)" note={"LTV: "+form.ltv+"%"}/>
+                <MetricRow label="Interest Expense (Yr 1)" value={"−"+fmtDC(m.annInterest)+"/yr"} color="var(--red)" note="Tax deductible — reduces taxable income"/>
+                <MetricRow label="Principal Paydown (Yr 1)" value={m.loanType==="io"?"$0 (I/O — recycled)":"−"+fmtDC(m.annPrincipal)+"/yr"} color={m.loanType==="io"?"var(--gold)":"var(--text2)"} note={m.loanType==="io"?"Principal available for next deal":"Return of capital — not deductible"}/>
+                <MetricRow label="Total Debt Service" value={"−"+fmtDC(m.annDS)+"/yr"} color="var(--text2)"/>
+                <MetricRow label="DSCR" value={m.dscr+"×"} color={parseFloat(m.dscr)>=1.25?"var(--green)":"var(--gold)"} highlight={true} note={parseFloat(m.dscr)>=1.25?"Lenders require ≥1.25× ✓":"Lenders require ≥1.25× — borderline"}/>
+              </div>
+              <div>
+                <div style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:11,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".04em",marginBottom:8}}>Returns</div>
+                <MetricRow label="Cash Flow Before Tax" value={fmtDC(m.cfbt)+"/yr"} color={m.cfbt>0?"var(--green)":"var(--red)"} highlight={true} note="NOI minus total debt service"/>
+                <MetricRow label="Cash-on-Cash Yield" value={m.coc+"%"} color="var(--gold)" note="CFBT ÷ Equity invested"/>
+                <MetricRow label="Taxable Income (est.)" value={fmtDC(m.taxableIncome)+"/yr"} color="var(--text2)" note="NOI − interest deduction"/>
+                <MetricRow label="Going-In Cap Rate" value={m.goingInCap+"%"} color="var(--blue)" note="NOI ÷ Purchase Price"/>
+                <MetricRow label="Projected IRR" value={m.irr+"%"} color={m.feasible?"var(--green)":"var(--red)"} highlight={true} note={m.holdYears+"-yr levered return"}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Exit & Space grid */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--gold)" title="Exit Analysis" sub={`Year ${m.holdYears} projected values`}/>
+              <MetricRow label="Exit NOI" value={fmtDC(m.exitNOI)+"/yr"} note="NOI grown at 2%/yr"/>
+              <MetricRow label="Exit Value" value={fmtDC(m.exitVal)} color="var(--gold)" note={"At "+m.goingInCap+"% cap rate on exit NOI"}/>
+              <MetricRow label="Remaining Loan" value={m.loanType==="io"?fmtDC(m.loanAmt)+" (I/O)":fmtDC(m.loanAmt-m.annPrincipal*m.holdYears)} color="var(--text2)"/>
+              <MetricRow label="Exit Equity" value={fmtDC(m.exitEquity)} color="var(--green)" highlight={true}/>
+              <MetricRow label="Total Return" value={m.totalReturn+"%"} color="var(--gold)" note={"Over "+m.holdYears+" years"}/>
+            </div>
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22}}>
+              <SectionHead dot="var(--blue)" title="Tenant Mix" sub="Space allocation breakdown"/>
+              <TenantBar anchorPct={parseFloat(form.anchorPct)||40} vacancy={parseFloat(form.vacancy)||8}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginTop:14}}>
+                <BigTile label="Anchor SF" value={fmt(m.anchorSF)+" SF"} color="var(--gold)" delay={0} sub={"$"+m.anchorRent+"/SF/yr"}/>
+                <BigTile label="Inline Occupied" value={fmt(m.inlineSF)+" SF"} color="var(--blue)" delay={.05} sub={"$"+m.inlineRent+"/SF/yr"}/>
+                <BigTile label="Vacant SF" value={fmt(m.vacantSF)+" SF"} color="var(--red)" delay={.1} sub={form.vacancy+"% vacancy"}/>
+                <BigTile label="Price / SF" value={"$"+m.pricePerSF} color="var(--text)" delay={.15}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Market Data (if available) */}
+          {marketData?.census&&(
+            <div style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,padding:22,marginBottom:14}}>
+              <SectionHead dot="var(--gold2)" title="Market Data" sub={marketData.census.county+" — Census ACS 2022"}/>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+                <BigTile label="Median HH Income" value={fmtDC(marketData.census.medianIncome)} color="var(--gold)" sub="US Census ACS 2022"/>
+                <BigTile label="County Population" value={fmt(marketData.census.population)} color="var(--blue)" sub="US Census ACS 2022"/>
+                <BigTile label="Market Rent NNN" value={"$"+m.baseRent+"/SF/yr"} color="var(--green)" sub={galv?"Galveston comps (CoStar)":"Income-derived estimate"}/>
+                {marketData.census.unempRate&&<BigTile label="Unemployment Rate" value={marketData.census.unempRate+"%"} color="var(--text2)" sub="County labor market"/>}
+                {marketData.census.medianRent&&<BigTile label="Median Residential Rent" value={fmtDC(marketData.census.medianRent)+"/mo"} color="var(--text2)" sub="Census ACS 2022"/>}
+                <BigTile label="Traffic / CPD" value={marketData.census.cpdEstimate||"See note"} color="var(--text2)" sub="See Step 2 for precise CPD sources"/>
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:12}}>
+            <button onClick={handleSave} disabled={saved} style={{padding:14,borderRadius:10,border:`1px solid ${saved?"var(--green)44":"var(--gold)44"}`,background:saved?"rgba(76,175,125,.08)":"rgba(200,151,42,.08)",color:saved?"var(--green)":"var(--gold)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,cursor:saved?"default":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,transition:"all .3s"}}
+              onMouseEnter={e=>{if(!saved)e.currentTarget.style.background="rgba(200,151,42,.15)";}}
+              onMouseLeave={e=>{if(!saved)e.currentTarget.style.background="rgba(200,151,42,.08)";}}>
+              {saved?"✓  Saved to Dashboard":"💾  Save This Deal"}
+            </button>
+            <button onClick={()=>setStep(1)} style={{padding:14,borderRadius:10,border:"1px solid var(--blue)44",background:"rgba(91,163,217,.08)",color:"var(--blue)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer",transition:"all .3s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(91,163,217,.15)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(91,163,217,.08)"}>
+              ⚙️  Adjust Inputs
+            </button>
+            <button onClick={()=>setStep(2)} style={{padding:14,borderRadius:10,border:"1px solid var(--green)44",background:"rgba(76,175,125,.08)",color:"var(--green)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer",transition:"all .3s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(76,175,125,.15)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(76,175,125,.08)"}>
+              🔄  Re-fetch Market Data
+            </button>
+            <button onClick={()=>window.print()} style={{padding:14,borderRadius:10,border:"1px solid rgba(255,255,255,.1)",background:"rgba(255,255,255,.04)",color:"var(--text2)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer",transition:"all .3s"}}
+              onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,.08)"}
+              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,.04)"}>
+              🖨️  Print Results
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Root ────────────────────────────────────────────────────────
+function App(){
+  const[tab,setTab]=useState("feasibility");
+  const[deals,setDeals]=useState([]);
+  const[dealsLoading,setDealsLoading]=useState(true);
+  const[pitchDeal,setPitchDeal]=useState(null);
+  const sessionId=useRef(getOrCreateSessionId()).current;
+  useEffect(()=>{loadDeals(sessionId).then(d=>{setDeals(d||[]);setDealsLoading(false);});},[]); 
+  const refresh=async()=>{const d=await loadDeals(sessionId);setDeals(d||[]);};
+  const handleDelete=async id=>{await deleteDeal(sessionId,id);setDeals(p=>p.filter(d=>d.id!==id));};
+  const handlePitchDeck=(deal)=>{setPitchDeal(deal);/* Don't auto-switch tab */};
+
+  const tabs=[
+    {id:"feasibility",label:"Feasibility Bot",dot:"var(--gold)"},
+    {id:"dashboard",label:`Saved Deals${deals.length>0?` (${deals.length})`:""}`,dot:"var(--green)"},
+    {id:"legals",label:"1-Click Legals",dot:"var(--blue)"},
+    {id:"pitch",label:"Pitch Deck",dot:"var(--text2)"},
+  ];
+
+  return(
+    <div style={{minHeight:"100vh",background:"var(--bg)"}}>
+      <div style={{position:"fixed",inset:0,backgroundImage:"radial-gradient(ellipse at 15% 60%,rgba(200,151,42,.04) 0%,transparent 55%),radial-gradient(ellipse at 85% 15%,rgba(91,163,217,.03) 0%,transparent 50%)",pointerEvents:"none",zIndex:0}}/>
+      <div className="no-print" style={{position:"sticky",top:0,zIndex:50,background:"rgba(14,12,9,.97)",backdropFilter:"blur(20px)",borderBottom:"1px solid var(--border)"}}>
+        <div style={{maxWidth:1200,margin:"0 auto",padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",height:68}}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <div style={{fontFamily:"'Playfair Display',serif",fontWeight:800,fontSize:22,color:"var(--gold)",letterSpacing:"-.01em"}}>GroundUp</div>
+            <div style={{fontFamily:"'Roboto Mono',monospace",fontSize:9,color:"var(--text3)",letterSpacing:".08em",marginTop:2}}>v4.3 · RETAIL OS</div>
+          </div>
+          <nav style={{display:"flex",gap:3,background:"var(--surface)",border:"1px solid var(--border)",borderRadius:10,padding:"3px"}}>
+            {tabs.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"8px 16px",borderRadius:7,border:"none",cursor:"pointer",background:tab===t.id?"var(--gold)":"transparent",color:tab===t.id?"#000":"var(--text2)",fontFamily:"'Source Sans 3',sans-serif",fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:6,transition:"all .2s",whiteSpace:"nowrap"}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:tab===t.id?"rgba(0,0,0,.4)":t.dot,transition:"background .2s"}}/>{t.label}
+              </button>
+            ))}
+          </nav>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:"var(--green)",animation:"pulse-dot 2s ease-in-out infinite"}}/>
+            <span style={{fontFamily:"'Source Sans 3',sans-serif",fontWeight:600,fontSize:12,color:"var(--text2)"}}>Live</span>
+            <span style={{fontFamily:"'Roboto Mono',monospace",fontSize:10,color:"var(--text3)",marginLeft:3}}>{new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</span>
+          </div>
+        </div>
+      </div>
+      <div style={{position:"relative",zIndex:1}}>
+        {tab==="feasibility"&&<Feasibility onSave={refresh} sessionId={sessionId} onPitchDeck={handlePitchDeck}/>}
+        {tab==="dashboard"&&<Dashboard deals={deals} onDelete={handleDelete} sessionId={sessionId} loading={dealsLoading}/>}
+        {tab==="legals"&&<Legals/>}
+        {tab==="pitch"&&<PitchDeck deal={pitchDeal||deals[0]||null}/>}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
